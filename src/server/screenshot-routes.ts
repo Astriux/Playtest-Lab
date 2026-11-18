@@ -43,7 +43,9 @@ export function registerScreenshotRoutes(app: Hono<AppContext>, resolveAuth: Res
     return new Response(file.body, {
       headers: {
         'Content-Type': file.headers.get('Content-Type') ?? 'application/octet-stream',
-        'Cache-Control': 'private, max-age=3600',
+        // Never let the browser keep a copy: every view must pass the access
+        // check, so a deleted project's screenshots can't be re-shown from cache.
+        'Cache-Control': 'private, no-store',
         'X-Content-Type-Options': 'nosniff',
       },
     })

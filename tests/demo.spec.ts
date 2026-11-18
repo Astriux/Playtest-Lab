@@ -29,4 +29,17 @@ test('demo project shows a full build comparison', async ({ users }) => {
   await row('Wave 7 too hard').locator('summary').click()
   await expect(row('Wave 7 too hard')).toContainText('The flyers in wave 7 shred everything')
   await expect(row('Wave 7 too hard')).toContainText('Demo tester 4')
+
+  // The owner can delete it; the name must be typed to confirm.
+  await dev.page.getByRole('link', { name: /Tower Defense \(demo\)/ }).click()
+  const projectUrl = new URL(dev.page.url()).pathname
+  await dev.page.getByRole('button', { name: 'Delete project…' }).click()
+  await dev.page.getByLabel('Type the project name to confirm').fill('wrong name')
+  await dev.page.getByRole('button', { name: 'Delete project', exact: true }).click()
+  await expect(dev.page.getByText('Type "Tower Defense (demo)" exactly to confirm.')).toBeVisible()
+  await dev.page.getByLabel('Type the project name to confirm').fill('Tower Defense (demo)')
+  await dev.page.getByRole('button', { name: 'Delete project', exact: true }).click()
+  await expect(dev.page).toHaveURL(/\/home$/, { timeout: 30_000 })
+  await dev.page.goto(projectUrl)
+  await expect(dev.page.getByRole('heading', { name: 'Project not found' })).toBeVisible({ timeout: 15_000 })
 })

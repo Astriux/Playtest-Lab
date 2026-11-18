@@ -193,4 +193,25 @@ test('dev sees all, tester sees only their own, outsider sees nothing', async ({
   await cy.page.reload()
   await expect(cy.page.getByRole('heading', { name: SECRET_PROJECT })).toBeVisible({ timeout: 15_000 })
   expect((await getShot(cy, benNoteId)).status).toBe(200)
+
+  // ── 5. Only the owner (Ava, who created it) can delete the project ───────
+  // Cy is a dev now, but not the owner: no delete section, and the server refuses.
+  await expect(cy.page.getByRole('heading', { name: 'Delete project' })).toHaveCount(0)
+  expect((await act(cy, 'deleteProject', { projectId })).body).toMatchObject({
+    success: false,
+    error: 'Only the project owner can delete it.',
+  })
+  expect((await act(ben, 'deleteProject', { projectId })).body).toMatchObject({
+    success: false,
+    error: 'You are not on this project.',
+  })
+
+  expect((await act(ava, 'deleteProject', { projectId })).body.success).toBe(true)
+
+  // Everything is gone: the project, the invite link, and the screenshot file itself.
+  await ava.page.goto(`/projects/${projectId}`)
+  await expect(ava.page.getByRole('heading', { name: 'Project not found' })).toBeVisible({ timeout: 15_000 })
+  expect((await act(ben, 'joinSession', { inviteCode })).body.error).toBe('This invite link is not valid.')
+  expect((await getShot(ava, benNoteId)).status).toBe(404)
+  expect(await direct(ben)).not.toBe(200)
 })

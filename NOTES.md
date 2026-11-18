@@ -496,3 +496,29 @@ a lock around summarizing.
   fixes it, and checks the dev sees "Clip on medal.tv" with the right address.
   The permission test calls the server directly with `javascript:`, `data:`
   and `http:` links, and all are refused. Full suite passes.
+
+## Owner can delete a project (2026-11-18)
+- **Who is the owner:** the dev who created the project. DeepSpace stamps
+  every row with its creator (`createdBy`), so existing projects already have
+  one; no schema change. The Team panel now shows "owner" next to that person.
+- **`deleteProject` action:** checks the caller is on the team (so outsiders
+  get the same "not on this project" answer as for a project that doesn't
+  exist), then that they're the owner. Other devs get "Only the project owner
+  can delete it." It then removes, in this order: screenshot files (in each
+  tester's private folder), notes, themes, sessions, builds, team members,
+  and finally the project. If anything fails halfway, the project still
+  exists and pressing Delete again finishes the job; every step is safe to
+  repeat.
+- **UI:** a "Delete project" box on the project page, shown only to the owner.
+  The confirm dialog lists what will be lost (builds, sessions, notes) and
+  asks for the project name to be typed. The button stays clickable and says
+  what's missing if the name doesn't match.
+- **Bug the new test caught:** screenshots were served with
+  `Cache-Control: private, max-age=3600`, so a browser that had already
+  viewed one could show it again for up to an hour after the project was
+  deleted, without asking the server. Changed to `no-store`: every view now
+  goes through the access check. Cost: thumbnails re-download when shown.
+- **Tested:** permission test: tester and non-owner dev are refused; after
+  the owner deletes, the project page, invite link, screenshot route and the
+  stored screenshot file are all gone. Demo test deletes the demo through the
+  UI, including a wrong-name attempt. Full suite passes.

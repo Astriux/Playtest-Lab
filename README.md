@@ -34,13 +34,15 @@ or disappeared ("Wave 7 too hard: 6 → 1").
 Payments, chat, collaborative text editing, and video uploads: none of them
 help answer "did my fix work?". For motion, testers paste a clip link
 (Medal, YouTube, Streamable) instead. A few uploaded clips would fill the free
-plan's 128 MiB file allowance, and links cost nothing to store. Also no project/build deletion, per-tester
-upload caps, or per-tester rates on the compare page (see "What's next").
+plan's 128 MiB file allowance, and links cost nothing to store. Also no
+deleting single builds, per-tester upload caps, or per-tester rates on the
+compare page (see "What's next").
 
 ## What's next
 - Normalize counts by number of testers, so a smaller playtest isn't
   mistaken for a fix.
-- Remove teammates and delete builds/projects.
+- Remove teammates and delete single builds (deleting a whole project is
+  done: owner only, with the name typed to confirm).
 - A per-session upload cap, and a lock so two devs can't summarize at once.
 - Let the dev rename or merge themes by hand when the AI groups imperfectly.
 

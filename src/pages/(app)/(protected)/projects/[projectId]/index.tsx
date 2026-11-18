@@ -5,8 +5,8 @@
 
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { useQuery, useUserLookup, type RecordData } from 'deepspace'
-import { Button, Input, Label, Textarea, useToast } from '@/components/ui'
+import { useAuth, useQuery, useUserLookup, type RecordData } from 'deepspace'
+import { Button, Input, Label, Modal, Textarea, useToast } from '@/components/ui'
 import { callAction } from '../../../../../lib/actions'
 import { timeAgo } from '../../../../../lib/format'
 import type {
@@ -25,6 +25,7 @@ export default function ProjectPage() {
   const sessions = useQuery<SessionData>('sessions', { where: { projectId }, orderBy: 'createdAt', orderDir: 'desc' })
   const feedback = useQuery<FeedbackData>('feedback', { where: { projectId } })
   const themes = useQuery<ThemeData>('themes', { where: { projectId } })
+  const { userId } = useAuth()
 
   const project = projects.records.find((p) => p.recordId === projectId)
 
@@ -98,7 +99,19 @@ export default function ProjectPage() {
 
         <aside className="space-y-8">
           <AddBuildForm projectId={projectId} />
-          <TeamPanel projectId={projectId} />
+          <TeamPanel projectId={projectId} ownerId={project.createdBy} />
+          {/* The owner is whoever created the project. The server checks this too. */}
+          {project.createdBy === userId && (
+            <DeleteProject
+              projectId={projectId}
+              name={project.data.name}
+              counts={{
+                builds: builds.records.length,
+                sessions: sessions.records.length,
+                notes: feedback.records.length,
+              }}
+            />
+          )}
         </aside>
       </div>
     </div>
@@ -243,7 +256,96 @@ function AddBuildForm({ projectId }: { projectId: string }) {
   )
 }
 
-function TeamPanel({ projectId }: { projectId: string }) {
+function DeleteProject(props: {
+  projectId: string
+  name: string
+  counts: { builds: number; sessions: number; notes: number }
+}) {
+  const [open, setOpen] = useState(false)
+  const [typed, setTyped] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
+  const navigate = useNavigate()
+  const { success } = useToast()
+  const { builds, sessions, notes } = props.counts
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+
+  function close() {
+    setOpen(false)
+    setTyped('')
+    setProblem(null)
+  }
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault()
+    // Clickable even when the name is wrong; say what's missing instead.
+    if (typed.trim() !== props.name) {
+      setProblem(`Type "${props.name}" exactly to confirm.`)
+      return
+    }
+    setBusy(true)
+    setProblem(null)
+    try {
+      await callAction('deleteProject', { projectId: props.projectId })
+      success('Project deleted', props.name)
+      navigate('/home', { replace: true })
+    } catch (err) {
+      setProblem((err as Error).message)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="rounded border border-destructive/40 bg-card p-5">
+      <h2 className="font-display text-lg font-bold">Delete project</h2>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Only you, the owner, can do this. It removes the project for everyone on the team.
+      </p>
+      <Button variant="outline" className="mt-4 w-full text-destructive" onClick={() => setOpen(true)}>
+        Delete project…
+      </Button>
+
+      <Modal open={open} onClose={close} size="sm">
+        <form onSubmit={onSubmit}>
+          <Modal.Header>
+            <Modal.Title className="font-display text-xl font-bold">Delete “{props.name}”?</Modal.Title>
+            <Modal.Description>
+              This permanently removes {plural(builds, 'build')}, {plural(sessions, 'session')},{' '}
+              {plural(notes, 'note')}, their screenshots and themes, for everyone. It can't be undone.
+            </Modal.Description>
+          </Modal.Header>
+          <Modal.Body>
+            <Label htmlFor="confirm-name">Type the project name to confirm</Label>
+            <Input
+              id="confirm-name"
+              autoFocus
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              placeholder={props.name}
+              autoComplete="off"
+              className="mt-1"
+            />
+            {problem && (
+              <p role="alert" className="mt-2 text-sm text-destructive">
+                {problem}
+              </p>
+            )}
+          </Modal.Body>
+          <Modal.Footer>
+            <Button type="button" variant="ghost" onClick={close} disabled={busy}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="destructive" loading={busy}>
+              Delete project
+            </Button>
+          </Modal.Footer>
+        </form>
+      </Modal>
+    </section>
+  )
+}
+
+function TeamPanel({ projectId, ownerId }: { projectId: string; ownerId: string }) {
   const { records: members } = useQuery<TeamMemberData>('team_members', { where: { teamId: projectId } })
   const { getName } = useUserLookup()
   const [email, setEmail] = useState('')
@@ -276,7 +378,10 @@ function TeamPanel({ projectId }: { projectId: string }) {
       <p className="mt-1 text-xs text-muted-foreground">Devs see every note. Testers only see their own.</p>
       <ul className="mt-3 space-y-1 text-sm">
         {active.map((m) => (
-          <li key={m.recordId}>{getName(m.data.userId) ?? 'Unknown user'}</li>
+          <li key={m.recordId}>
+            {getName(m.data.userId) ?? 'Unknown user'}
+            {m.data.userId === ownerId && <span className="ml-2 font-mono text-xs text-muted-foreground">owner</span>}
+          </li>
         ))}
       </ul>
       <form onSubmit={onSubmit} className="mt-4 flex gap-2">

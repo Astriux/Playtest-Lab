@@ -10,7 +10,7 @@
  * from `params` without checking them.
  */
 
-import { appFiles } from 'deepspace/worker'
+import { appFiles, AppFileError } from 'deepspace/worker'
 import type { ActionHandler, ActionResult, ActionTools } from 'deepspace/worker'
 import type { Env } from '../../worker'
 import {
@@ -324,6 +324,60 @@ const submitFeedback: ActionHandler<Env> = async ({ userId, params, tools, env }
   return ok({ feedbackId })
 }
 
+/** Delete every row matching `where`; deleteWhere removes at most 500 per call. */
+async function deleteAll(tools: ActionTools, collection: string, where: Record<string, string>) {
+  for (;;) {
+    const res = await tools.deleteWhere(collection, where, 500)
+    if (!res.success) return res
+    if (res.data.deleted < 500) return ok({})
+  }
+}
+
+/**
+ * Delete a project and everything in it. Only the project's owner (the dev
+ * who created it) may do this; other devs on the team can't.
+ *
+ * Order matters: screenshots and child rows first, the team, then the
+ * project itself. If anything fails halfway, the project still exists and
+ * the owner can press Delete again; every step is safe to repeat.
+ */
+const deleteProject: ActionHandler<Env> = async ({ userId, params, tools, env }) => {
+  const projectId = cleanText(params.projectId, 64)
+  if (!projectId) return fail('Missing project.')
+  // Same answer for "doesn't exist" and "not yours to see".
+  if (!(await isTeamMember(tools, projectId, userId))) return fail('You are not on this project.')
+  const project = await tools.get<ProjectData>('projects', projectId)
+  if (!project.success) return fail('Project not found.')
+  if (project.data.record.createdBy !== userId) return fail('Only the project owner can delete it.')
+
+  // Screenshots live in each tester's private folder, not in the records.
+  const notes = await tools.query<FeedbackData>('feedback', { where: { projectId } })
+  if (!notes.success) return notes
+  for (const note of notes.data.records) {
+    const { screenshotKey, testerId } = note.data
+    if (!screenshotKey) continue
+    try {
+      await appFiles(env, { scope: 'self', userId: testerId }).delete(screenshotKey)
+    } catch (err) {
+      if (!(err instanceof AppFileError && err.status === 404)) {
+        console.error('[deleteProject] screenshot delete failed:', err)
+        return fail('Could not delete the screenshots. Nothing else was removed; try again.')
+      }
+    }
+  }
+
+  for (const collection of ['feedback', 'themes', 'sessions', 'builds']) {
+    const res = await deleteAll(tools, collection, { projectId })
+    if (!res.success) return res
+  }
+  const team = await deleteAll(tools, 'team_members', { teamId: projectId })
+  if (!team.success) return team
+  const removed = await tools.remove('projects', projectId)
+  if (!removed.success) return removed
+
+  return ok({ projectId, notes: notes.data.records.length })
+}
+
 const MAX_NOTES_TO_SUMMARIZE = 300
 
 /**
@@ -383,12 +437,9 @@ const summarizeSession: ActionHandler<Env> = async ({ userId, params, tools, env
     notes.map((n) => n.recordId),
   )
 
-  // Replace this build's themes. deleteWhere removes at most 500 per call.
-  for (;;) {
-    const del = await tools.deleteWhere('themes', { buildId }, 500)
-    if (!del.success) return del
-    if (del.data.deleted < 500) break
-  }
+  // Replace this build's themes.
+  const cleared = await deleteAll(tools, 'themes', { buildId })
+  if (!cleared.success) return cleared
   for (const t of themes) {
     const res = await tools.create<ThemeData>('themes', {
       projectId,
@@ -413,6 +464,7 @@ export const actions: Record<string, ActionHandler<Env>> = {
   summarizeSession,
   createProject,
   createDemoProject,
+  deleteProject,
   addTeammate,
   addBuild,
   openSession,
