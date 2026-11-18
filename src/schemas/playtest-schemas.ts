@@ -108,6 +108,34 @@ export const themesSchema: CollectionSchema = {
   permissions: teamRule(false),
 }
 
+/** The shape of each record's `data`, for TypeScript on both sides. */
+export type ProjectData = { name: string; teamId: string }
+export type TeamMemberData = { teamId: string; userId: string; status: 'active' | 'removed' }
+export type BuildData = { projectId: string; version: string; changelog: string }
+export type SessionData = {
+  projectId: string
+  buildId: string
+  status: 'open' | 'closed'
+  inviteCode: string
+}
+export type FeedbackData = {
+  projectId: string
+  buildId: string
+  sessionId: string
+  testerId: string
+  tag: Tag
+  text: string
+  screenshotKey: string
+}
+export type ThemeData = {
+  projectId: string
+  buildId: string
+  name: string
+  summary: string
+  count: number
+  feedbackIds: string[]
+}
+
 export const playtestSchemas = [
   projectsSchema,
   teamMembersSchema,

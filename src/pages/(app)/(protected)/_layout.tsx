@@ -1,42 +1,75 @@
 /**
- * Gated routes. Any file under src/pages/(app)/(protected)/ requires sign-in.
- * The `(protected)` folder is a Generouted route group — parentheses mean
- * it doesn't appear in the URL. For a dynamic page that does NOT require
- * sign-in, put it directly under src/pages/(app)/; for a static page, put it
- * at the top level of src/pages/.
+ * Every page under (protected)/ requires sign-in. The folder name is not
+ * magic: this layout's <AuthGate> is what does the gating.
  *
- * Children may call data hooks like `useUser()` safely because the parent
- * (app)/_layout.tsx mounts <RecordProvider> above this layout.
- *
- * The `fallback` keeps signed-out visitors inside the app's own chrome
- * (without it, AuthGate shows the SDK's full-screen, non-dismissible
- * overlay). The sign-in overlay opens on demand and can be dismissed.
+ * Signing in with Google/GitHub always comes back to /home. So before the
+ * sign-in starts we remember where the user was (e.g. an invite link), and
+ * send them back there once they're signed in.
  */
 
-import { useState } from 'react'
-import { Link, Outlet } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { AuthGate, AuthOverlay } from 'deepspace'
 import { Button } from '@/components/ui'
+
+const RETURN_KEY = 'playtest-lab:return-to'
 
 export default function ProtectedLayout() {
   return (
     <AuthGate fallback={<SignedOutPanel />}>
+      <ReturnAfterSignIn />
       <Outlet />
     </AuthGate>
   )
 }
 
+function ReturnAfterSignIn() {
+  const navigate = useNavigate()
+  const location = useLocation()
+
+  useEffect(() => {
+    let target: string | null = null
+    try {
+      target = sessionStorage.getItem(RETURN_KEY)
+      sessionStorage.removeItem(RETURN_KEY)
+    } catch {
+      return
+    }
+    // Only same-site paths: "/join/abc" yes, "//evil.com" or "https://..." no.
+    if (target && target.startsWith('/') && !target.startsWith('//') && target !== location.pathname) {
+      navigate(target, { replace: true })
+    }
+  }, [navigate, location.pathname])
+
+  return null
+}
+
 function SignedOutPanel() {
   const [showAuthModal, setShowAuthModal] = useState(false)
+  const location = useLocation()
+  const isInvite = location.pathname.startsWith('/join/')
+
+  function startSignIn() {
+    try {
+      sessionStorage.setItem(RETURN_KEY, location.pathname)
+    } catch {
+      // Private mode: they'll land on /home and can reopen the link.
+    }
+    setShowAuthModal(true)
+  }
 
   return (
     <div className="flex min-h-[60vh] items-center justify-center px-6 py-20">
       <div className="w-full max-w-sm rounded border border-border bg-card p-8 text-center">
-        <h1 className="font-display text-xl font-bold text-foreground">Sign in to continue</h1>
+        <h1 className="font-display text-xl font-bold text-foreground">
+          {isInvite ? "You're invited to a playtest" : 'Sign in to continue'}
+        </h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Devs and testers both sign in, so every note is tied to a real person.
+          {isInvite
+            ? 'Sign in so the developers know which notes are yours. Only they and you can see your notes.'
+            : 'Devs and testers both sign in, so every note is tied to a real person.'}
         </p>
-        <Button className="mt-6 w-full" onClick={() => setShowAuthModal(true)}>
+        <Button className="mt-6 w-full" onClick={startSignIn}>
           Sign in
         </Button>
         <Link

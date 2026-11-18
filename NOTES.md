@@ -99,3 +99,62 @@ works as a plain `<img src>`.
 - PowerShell blocks `npx.ps1`; use `npx.cmd deepspace ...` instead (no need to
   change the execution policy).
 - `deepspace auth login` needs an interactive terminal.
+
+## Step 2: projects, builds, sessions, invite links, submitFeedback (2026-11-18)
+
+### What was built
+- **Server actions** in `src/actions/index.ts` (each is `POST /api/actions/<name>`):
+  `createProject`, `addTeammate`, `addBuild`, `openSession`, `closeSession`,
+  `joinSession`, `submitFeedback`. A small `callAction()` helper in
+  `src/lib/actions.ts` calls them from the browser with the sign-in token.
+- **Pages** (all require sign-in):
+  - `/home`: your projects, plus a "new project" form.
+  - `/projects/:id`: builds (newest first) with their sessions and note
+    counts, "add a build" form, team list with "add teammate by email".
+  - `/sessions/:id`: the dev's session view: invite link (copy), end
+    session, every note with tag counts. Live: new notes appear without reload.
+  - `/join/:inviteCode`: the tester's page: build version + changelog, four
+    tag buttons, a text box, and "your notes".
+- Signing in with Google/GitHub always returns to `/home`, which would lose an
+  invite link. The sign-in gate now remembers the page you were on and sends
+  you back (same-site paths only, so it can't be abused as a redirect).
+
+### How each action protects itself
+Action tools skip collection permissions entirely, so each action checks:
+- **Who is calling** comes from the verified token, never from `params`.
+- **Team membership** (`isTeamMember`: an active `team_members` row) before
+  any project write: `addTeammate`, `addBuild`, `openSession`, `closeSession`.
+  For build/session actions the project id is read from the stored record,
+  not from the request.
+- **submitFeedback** takes only `inviteCode`, `tag`, `text`. It looks up the
+  session by code, refuses if it's closed, and copies `projectId`, `buildId`,
+  `sessionId` from the session and `testerId` from the caller. A client that
+  sends its own `projectId` or `testerId` is ignored.
+- **Inputs** are trimmed and length-limited; tags must be one of the four.
+- **addTeammate** returns only the teammate's name. Action tools see full
+  user rows, emails included, so nothing else leaks back.
+
+### Decisions and tradeoffs
+- **The invite code is the key.** 10 random characters (~49 bits) from an
+  alphabet without look-alikes. Anyone with the link who signs in can add notes
+  until the dev ends the session. Simple to share; the dev's control is
+  "end session".
+- **Testers can't read sessions or projects.** `joinSession` returns just what
+  the join page shows (project name, version, changelog, open/closed).
+- **Teammates are added by email** and must have signed in once (their user
+  row has to exist). Downside: it reveals whether an email has an account.
+  Acceptable for a team tool; an invite-by-link flow would avoid it.
+- **No toasts on the tester page.** On a phone the "note sent" toast covered
+  the Send button and blocked the next note (found by the screenshot test).
+  It's now an inline status line next to the button.
+- Two writes in `createProject` (project, then membership) aren't atomic. If
+  the second failed, the creator still owns the project row and could retry.
+
+### Tested
+- New spec `tests/playtest-flow.spec.ts`, with three real accounts:
+  Ava creates a project, adds a build, opens a session; Ben joins via the
+  invite link and sends a note; Ava sees it appear without reloading; Ben and
+  Cy both get "not found" on the project and session pages; Ava ends the
+  session and Ben's form disappears.
+- All 12 tests pass (`deepspace test run all`), plus `tsc` and `eslint`.
+- Screenshots of project, session, and join pages (desktop + phone) checked.
