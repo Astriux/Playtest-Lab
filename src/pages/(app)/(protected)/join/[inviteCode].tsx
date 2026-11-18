@@ -4,13 +4,16 @@
  * back just what this page needs to show.
  */
 
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent } from 'react'
 import { useParams } from 'react-router-dom'
 import { useAuth, useQuery } from 'deepspace'
+import { ImagePlus, X } from 'lucide-react'
 import { Button, Textarea } from '@/components/ui'
+import { ScreenshotThumb } from '../../../../components/Screenshot'
 import { TAG_META, TagChip } from '../../../../components/Tag'
 import { callAction } from '../../../../lib/actions'
 import { timeAgo } from '../../../../lib/format'
+import { prepareScreenshot } from '../../../../lib/screenshot'
 import { cn } from '../../../../lib/utils'
 import { TAGS, type FeedbackData, type Tag } from '../../../../schemas/playtest-schemas'
 
@@ -69,12 +72,38 @@ export default function JoinPage() {
   )
 }
 
+type Shot = { base64: string; previewUrl: string }
+
 function NoteForm({ inviteCode }: { inviteCode: string }) {
   const [tag, setTag] = useState<Tag | null>(null)
   const [text, setText] = useState('')
+  const [shot, setShot] = useState<Shot | null>(null)
   const [busy, setBusy] = useState(false)
   // Inline status instead of toasts: on a phone a toast covers the Send button.
   const [status, setStatus] = useState<{ ok: boolean; message: string } | null>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
+
+  function clearShot() {
+    if (shot) URL.revokeObjectURL(shot.previewUrl)
+    setShot(null)
+  }
+
+  async function attach(file: Blob | null | undefined) {
+    if (!file || !file.type.startsWith('image/')) return
+    try {
+      clearShot()
+      setShot(await prepareScreenshot(file))
+    } catch (err) {
+      setStatus({ ok: false, message: (err as Error).message })
+    }
+  }
+
+  function onPaste(e: ClipboardEvent) {
+    const item = Array.from(e.clipboardData.items).find((i) => i.type.startsWith('image/'))
+    if (!item) return
+    e.preventDefault()
+    void attach(item.getAsFile())
+  }
 
   async function send(e?: FormEvent) {
     e?.preventDefault()
@@ -84,9 +113,10 @@ function NoteForm({ inviteCode }: { inviteCode: string }) {
     setBusy(true)
     setStatus(null)
     try {
-      await callAction('submitFeedback', { inviteCode, tag, text })
+      await callAction('submitFeedback', { inviteCode, tag, text, screenshot: shot?.base64 })
       setStatus({ ok: true, message: 'Sent. Keep them coming.' })
       setText('')
+      clearShot()
     } catch (err) {
       setStatus({ ok: false, message: (err as Error).message })
     } finally {
@@ -95,7 +125,7 @@ function NoteForm({ inviteCode }: { inviteCode: string }) {
   }
 
   return (
-    <form onSubmit={send} className="mt-8 rounded border border-border bg-card p-5">
+    <form onSubmit={send} onPaste={onPaste} className="mt-8 rounded border border-border bg-card p-5">
       <fieldset>
         <legend className="text-sm font-medium">What kind of note?</legend>
         <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -132,7 +162,41 @@ function NoteForm({ inviteCode }: { inviteCode: string }) {
         rows={3}
         className="mt-1"
       />
-      <div className="mt-3 flex items-center justify-between gap-4">
+
+      <div className="mt-3 flex items-center gap-3">
+        {shot ? (
+          <div className="relative">
+            <img src={shot.previewUrl} alt="Screenshot to attach" className="h-16 w-28 rounded border border-border object-cover" />
+            <button
+              type="button"
+              onClick={clearShot}
+              aria-label="Remove screenshot"
+              className="absolute -right-2 -top-2 rounded-full border border-border bg-card p-0.5 hover:bg-muted"
+            >
+              <X className="h-3.5 w-3.5" aria-hidden />
+            </button>
+          </div>
+        ) : (
+          <Button type="button" variant="outline" size="sm" onClick={() => fileInput.current?.click()}>
+            <ImagePlus aria-hidden />
+            Add screenshot
+          </Button>
+        )}
+        <span className="text-xs text-muted-foreground">{shot ? 'Will be sent with this note' : 'or paste one with Ctrl+V'}</span>
+        <input
+          ref={fileInput}
+          type="file"
+          accept="image/*"
+          hidden
+          aria-label="Screenshot file"
+          onChange={(e) => {
+            void attach(e.target.files?.[0])
+            e.target.value = ''
+          }}
+        />
+      </div>
+
+      <div className="mt-4 flex items-center justify-between gap-4 border-t border-border pt-4">
         <span
           role="status"
           className={cn('font-mono text-xs', status ? (status.ok ? 'text-tag-fun' : 'text-destructive') : 'text-muted-foreground')}
@@ -165,9 +229,14 @@ function MyNotes({ sessionId }: { sessionId: string }) {
         {mine.map((n) => (
           <li key={n.recordId} className="flex items-start gap-3 py-3">
             <TagChip tag={n.data.tag} className="mt-0.5 shrink-0" />
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <p className="text-sm">{n.data.text}</p>
               <p className="mt-0.5 font-mono text-xs text-muted-foreground">{timeAgo(n.createdAt)}</p>
+              {n.data.screenshotKey && (
+                <div className="mt-2">
+                  <ScreenshotThumb feedbackId={n.recordId} />
+                </div>
+              )}
             </div>
           </li>
         ))}

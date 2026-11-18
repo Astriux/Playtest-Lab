@@ -15,10 +15,12 @@ import type { Env } from '../../worker'
 import {
   TAGS,
   type BuildData,
+  type FeedbackData,
   type ProjectData,
   type SessionData,
   type Tag,
 } from '../schemas/playtest-schemas'
+import { isTeamMember } from '../server/access'
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 
@@ -43,12 +45,27 @@ function optionalText(value: unknown, max: number): string | null {
 /** One membership row per (project, user), so re-adding someone updates it. */
 const memberId = (projectId: string, userId: string) => `${projectId}_${userId}`
 
-async function isTeamMember(tools: ActionTools, projectId: string, userId: string) {
-  const res = await tools.query('team_members', {
-    where: { teamId: projectId, userId, status: 'active' },
-    limit: 1,
-  })
-  return res.success && res.data.records.length > 0
+const MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024
+
+/**
+ * Decode a base64 screenshot and work out its type from its first bytes,
+ * not from anything the browser claims. Only JPEG, PNG and WebP pass, so
+ * nothing that a browser would run (HTML, SVG) can be stored.
+ */
+function readScreenshot(value: unknown): { bytes: Uint8Array; type: string } | null {
+  if (typeof value !== 'string' || value.length > (MAX_SCREENSHOT_BYTES * 4) / 3 + 4) return null
+  let bytes: Uint8Array
+  try {
+    bytes = Uint8Array.from(atob(value), (ch) => ch.charCodeAt(0))
+  } catch {
+    return null
+  }
+  const starts = (...sig: number[]) => sig.every((b, i) => bytes[i] === b)
+  if (starts(0xff, 0xd8, 0xff)) return { bytes, type: 'image/jpeg' }
+  if (starts(0x89, 0x50, 0x4e, 0x47)) return { bytes, type: 'image/png' }
+  const ascii = (from: number, to: number) => String.fromCharCode(...bytes.slice(from, to))
+  if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return { bytes, type: 'image/webp' }
+  return null
 }
 
 /** 10 characters from an alphabet without look-alikes (no 0/o, 1/l/i). */
@@ -184,7 +201,7 @@ const joinSession: ActionHandler<Env> = async ({ params, tools }) => {
  * who created the row, so feedback created by someone else would be invisible
  * to the tester (see NOTES.md, step 1, question a).
  */
-const submitFeedback: ActionHandler<Env> = async ({ userId, params, tools }) => {
+const submitFeedback: ActionHandler<Env> = async ({ userId, params, tools, env }) => {
   const session = await findSessionByCode(tools, params.inviteCode)
   if (!session) return fail('This invite link is not valid.')
   if (session.data.status !== 'open') return fail('This playtest session has ended.')
@@ -194,17 +211,28 @@ const submitFeedback: ActionHandler<Env> = async ({ userId, params, tools }) => 
   const text = cleanText(params.text, 1000)
   if (!text) return fail('Write a note (up to 1000 characters).')
 
-  const res = await tools.create('feedback', {
-    projectId: session.data.projectId,
-    buildId: session.data.buildId,
-    sessionId: session.recordId,
-    testerId: userId,
-    tag,
-    text,
-    screenshotKey: '',
-  })
-  if (!res.success) return res
-  return ok({ feedbackId: res.data.recordId })
+  const { projectId, buildId } = session.data
+  const feedbackId = crypto.randomUUID()
+  let screenshotKey = ''
+
+  if (params.screenshot) {
+    const shot = readScreenshot(params.screenshot)
+    if (!shot) return fail('Screenshots must be a JPEG, PNG or WebP image under 2 MB.')
+    if (shot.bytes.length > MAX_SCREENSHOT_BYTES) return fail('That screenshot is over 2 MB.')
+    screenshotKey = `screenshots/${projectId}/${feedbackId}`
+    await env.SCREENSHOTS.put(screenshotKey, shot.bytes, { httpMetadata: { contentType: shot.type } })
+  }
+
+  const res = await tools.create<FeedbackData>(
+    'feedback',
+    { projectId, buildId, sessionId: session.recordId, testerId: userId, tag, text, screenshotKey },
+    feedbackId,
+  )
+  if (!res.success) {
+    if (screenshotKey) await env.SCREENSHOTS.delete(screenshotKey)
+    return res
+  }
+  return ok({ feedbackId })
 }
 
 export const actions: Record<string, ActionHandler<Env>> = {

@@ -144,6 +144,15 @@
   --tw-exit-rotate: initial;
 }
 
+/* A note that arrives while the dev is watching glows briefly. */
+@keyframes note-arrive {
+  from { background-color: color-mix(in srgb, var(--color-signal) 18%, transparent); }
+  to { background-color: transparent; }
+}
+@utility animate-note-arrive {
+  animation: note-arrive 3s ease-out;
+}
+
 @utility fade-in-0 { --tw-enter-opacity: 0; }
 @utility fade-out-0 { --tw-exit-opacity: 0; }
 @utility zoom-in-95 { --tw-enter-scale: .95; }

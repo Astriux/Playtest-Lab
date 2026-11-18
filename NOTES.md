@@ -172,3 +172,123 @@ Action tools skip collection permissions entirely, so each action checks:
 - **Rule going forward:** only disable a button while it's busy. Otherwise
   let people press it and tell them what's missing.
 - Flow test now also checks both "what's missing" messages; all 12 tests pass.
+
+## Reference: how the example apps set the bar (read 2026-11-18)
+
+Skimmed the source of three examples named in the brief (github.com/deepdotspace):
+
+| | StoryNest | ThreadHunt | RunningMap |
+|---|---|---|---|
+| Size | ~14k lines | ~12k lines | ~14k lines |
+| Who sees what | owner + public "published" books | single user (`read: 'own'`) | single user (`read: 'own'`) |
+| Server actions | 17 (credits, generation, sharing) | 8 (topics, scans, drafts) | none |
+| Integrations | Claude, Gemini images, ElevenLabs audio | Firecrawl search, Claude | none (free public APIs from the browser) |
+| Background work | JobRoom pipeline with retries | JobRoom scans + cron rescans | none |
+| Files | public (`'app'` scope) book art | none | none |
+| Other | credits + subscriptions | keyboard triage, CSV export | 18 unit-test files of map/geo logic |
+
+What this means for Playtest Lab:
+- **Where we go further:** none of the three has more than one kind of user
+  sharing data. Playtest Lab's dev team / tester / outsider model with the
+  `team` rule, `team_members`, and server actions that check membership is
+  a DeepSpace capability none of them exercise.
+- **Where they go further:** integration and pipeline depth. StoryNest chains
+  three AI services as a background job; ThreadHunt runs scheduled scans.
+  Our AI step is one well-designed call, so it has to be good.
+- **Contrast worth explaining:** StoryNest stores images with public `'app'`
+  scope because shared books are meant to be public. Our screenshots are
+  unreleased-game captures that must stay private to one team, which is why
+  we need our own bucket and a server-side check.
+- **AI calls:** ThreadHunt and StoryNest call Claude through
+  `createDeepSpaceAI(env, 'anthropic')` + the `ai` package, billed to the app
+  owner's DeepSpace credits, with no API key to manage. Step 4 will do the same.
+- **Tests:** RunningMap unit-tests its pure logic. The build-comparison math
+  (up / down / new / gone) is a pure function and gets unit tests in step 4.
+
+## Step 3: screenshots, live feed, permission proof (2026-11-18)
+
+### What was built
+- **Private screenshot storage.** A dedicated R2 bucket (`SCREENSHOTS` in
+  `wrangler.toml`, `bucket_name = "auto"` so DeepSpace creates it on deploy).
+  Only the worker can reach it; there is no public URL.
+  - Upload rides along with `submitFeedback`. The server decodes the image,
+    checks its first bytes to confirm it really is JPEG / PNG / WebP (not
+    what the browser claims), caps it at 2 MB, and stores it under
+    `screenshots/<projectId>/<feedbackId>`. If saving the note fails, the
+    image is deleted again.
+  - Viewing goes through `GET /api/screenshots/:feedbackId`
+    (`src/server/screenshot-routes.ts`). It allows the tester who wrote the
+    note or an active team member, and answers 404 to everyone else, so an
+    outsider can't even tell whether a screenshot exists.
+  - The browser shrinks images to 1600px and re-encodes them as JPEG before
+    upload. A 4K screenshot drops to a few hundred KB, and hidden metadata
+    (like GPS location from a phone photo) is stripped.
+  - Testers can click **Add screenshot** or just **paste** (Win+Shift+S, then
+    Ctrl+V), which is the natural flow when playing on PC.
+- **Live feed for devs** on the session page: notes still arrive live via
+  `useQuery`; new arrivals glow for 3 seconds; filter buttons per tag with
+  counts; "N notes from M testers"; screenshot thumbnails that open full size.
+- **Shared access helpers** in `src/server/access.ts` (`isTeamMember`,
+  `canReadFeedback`), used by both the actions and the screenshot route, so
+  there is one definition of "who may see this".
+
+### Why a custom bucket instead of the built-in file storage
+`useR2Files` offers `'self'` (only the uploader) or `'app'` (anyone with the
+URL). Devs couldn't see `'self'` screenshots, and `'app'` would make
+screenshots of unreleased games public. StoryNest uses `'app'` on purpose
+because its books are meant to be shared; our case is the opposite. The cost
+is ~40 lines of our own route plus an access check we have to get right, which
+the permission test covers.
+
+### Permission proof: `tests/permissions.spec.ts`
+Three real accounts: **Ava** (dev on the team), **Ben** (tester via invite
+link), **Cy** (outsider). Checked at the server, not the UI:
+
+1. **What the server actually sends.** The test records every WebSocket
+   message each user receives while opening the project, session and invite
+   pages. That's the raw data their browser got, whatever the UI showed.
+   - Ava receives the project, Ben's note and her own note (proves the
+     recording works).
+   - Ben receives his own note, but **not** Ava's note, the project name, or
+     the build version.
+   - Cy receives **none** of them.
+2. **Direct action calls** as Ben and as Cy: `addBuild`, `openSession`,
+   `closeSession`, and adding themselves with `addTeammate` all fail with
+   "You are not on this project."
+3. **Spoofing:** Ben submits a note claiming `testerId = Ava` and a different
+   `projectId`. The server ignores both. Proof: Ben can still fetch that
+   note's screenshot, which he couldn't if it had been saved as Ava's.
+4. **Bad files:** an SVG with a `<script>` sent as a "screenshot" is refused.
+5. **Screenshot route:** Ava 200 `image/png`, Ben 200, Cy 404, signed-out 401.
+6. **Granting access works:** after Ava adds Cy to the team, Cy can open the
+   project and fetch the screenshot.
+
+### Confirmed SDK issue: new teammates need one reload
+Step 1 spotted `notifyTeamMembershipChange` reading `record.data.UserId`
+(capital U) while the column is `userId`. The permission test now measures
+it: when Ava adds Cy, Cy's already-open page does **not** update by itself
+(`membership-live-update: false`); after a reload he sees everything. Access
+is correct, only the live refresh is missing. Impact is small (a new teammate
+usually opens the app fresh), so no workaround in the app. Worth reporting
+to DeepSpace (`npx deepspace feedback`).
+
+### Bugs found while testing
+- The notes heading read as "1 note**from** 1 tester" to screen readers (the gap
+  was CSS margin, not a space). Fixed in the markup.
+
+### Tradeoffs and limits
+- Screenshots travel inside the action's JSON as base64 (~33% bigger than
+  raw). Fine at under 2 MB after shrinking; a direct upload route would scale
+  better for video or huge files, which this app doesn't need.
+- No per-tester upload limit. A tester with the link could fill storage with
+  many 2 MB images until the session is ended. Acceptable for invited
+  playtests; a per-session cap would be the next step.
+- Images are fetched with the sign-in token and shown via a local blob URL,
+  because a plain `<img src>` can't send the token.
+
+### Tested
+- All 13 tests pass (`deepspace test run all`), including the new permission
+  spec and the flow spec, which now uploads a screenshot through the real form
+  and checks the dev sees the thumbnail.
+- Screenshots of the live feed (filters, thumbnails, glow) and the tester
+  form with an attached image checked at desktop and phone width.

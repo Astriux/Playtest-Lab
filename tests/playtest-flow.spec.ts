@@ -47,12 +47,24 @@ test('dev runs a session, tester leaves a note, outsider sees nothing', async ({
   await expect(tester.page.getByText('Pick a tag first.')).toBeVisible()
   await tester.page.getByRole('button', { name: 'Balance' }).click()
   await tester.page.getByLabel('What happened?').fill('Wave 7 wiped me out three times')
+  await tester.page.getByLabel('Screenshot file').setInputFiles({
+    name: 'wave7.png',
+    mimeType: 'image/png',
+    buffer: Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    ),
+  })
+  await expect(tester.page.getByAltText('Screenshot to attach')).toBeVisible()
   await tester.page.getByRole('button', { name: 'Send note' }).click()
   await expect(tester.page.getByRole('heading', { name: 'Your notes (1)' })).toBeVisible({ timeout: 15_000 })
 
   // Dev: the note shows up without a reload
   await expect(dev.page.getByText('Wave 7 wiped me out three times')).toBeVisible({ timeout: 15_000 })
-  await expect(dev.page.getByRole('heading', { name: '1 note' })).toBeVisible()
+  await expect(dev.page.getByRole('heading', { name: /^1 note from 1 tester/ })).toBeVisible()
+  await expect(dev.page.getByRole('button', { name: 'View screenshot' }).locator('img')).toHaveAttribute('src', /^blob:/, {
+    timeout: 15_000,
+  })
 
   // Tester and outsider can't open the dev pages
   for (const other of [tester, outsider]) {

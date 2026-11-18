@@ -1,21 +1,25 @@
 /**
  * /sessions/:sessionId: the dev's view of one playtest. Shows the invite
- * link and every note. The list is live, so new notes appear on their own.
+ * link and every note. useQuery keeps the list live, so new notes appear
+ * (and briefly glow) as testers send them.
  */
 
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useUserLookup } from 'deepspace'
 import { Button, useToast } from '@/components/ui'
+import { ScreenshotThumb } from '../../../../components/Screenshot'
 import { TAG_META, TagChip } from '../../../../components/Tag'
 import { callAction } from '../../../../lib/actions'
 import { inviteUrl, timeAgo } from '../../../../lib/format'
+import { cn } from '../../../../lib/utils'
 import {
   TAGS,
   type BuildData,
   type FeedbackData,
   type ProjectData,
   type SessionData,
+  type Tag,
 } from '../../../../schemas/playtest-schemas'
 
 export default function SessionPage() {
@@ -28,6 +32,9 @@ export default function SessionPage() {
   const builds = useQuery<BuildData>('builds', { where: { projectId } })
   const notes = useQuery<FeedbackData>('feedback', { where: { sessionId }, orderBy: 'createdAt', orderDir: 'desc' })
   const { getName } = useUserLookup()
+  const [filter, setFilter] = useState<Tag | 'all'>('all')
+  // Notes created after the page opened are "new" and get a short glow.
+  const [openedAt] = useState(() => Date.now())
 
   if (sessions.status === 'loading') {
     return <p className="mx-auto max-w-4xl px-5 py-10 text-sm text-muted-foreground sm:px-8">Loading…</p>
@@ -45,8 +52,10 @@ export default function SessionPage() {
   const build = builds.records.find((b) => b.recordId === session.data.buildId)
   const open = session.data.status === 'open'
 
-  const counts = Object.fromEntries(TAGS.map((t) => [t, 0])) as Record<(typeof TAGS)[number], number>
+  const counts = Object.fromEntries(TAGS.map((t) => [t, 0])) as Record<Tag, number>
   for (const n of notes.records) counts[n.data.tag] += 1
+  const testerCount = new Set(notes.records.map((n) => n.data.testerId)).size
+  const shown = filter === 'all' ? notes.records : notes.records.filter((n) => n.data.tag === filter)
 
   return (
     <div className="mx-auto max-w-4xl px-5 py-10 sm:px-8">
@@ -74,27 +83,46 @@ export default function SessionPage() {
       {open && <InvitePanel sessionId={sessionId} inviteCode={session.data.inviteCode} />}
 
       <section className="mt-10" aria-labelledby="notes-heading">
-        <div className="flex flex-wrap items-baseline justify-between gap-4 border-b-2 border-foreground pb-2">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-3 border-b-2 border-foreground pb-2">
           <h2 id="notes-heading" className="font-display text-xl font-bold">
-            {notes.records.length} {notes.records.length === 1 ? 'note' : 'notes'}
+            {notes.records.length} {notes.records.length === 1 ? 'note' : 'notes'}{' '}
+            <span className="ml-1 font-sans text-sm font-normal text-muted-foreground">
+              from {testerCount} {testerCount === 1 ? 'tester' : 'testers'}
+            </span>
           </h2>
-          <ul className="flex flex-wrap gap-4 font-mono text-xs">
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter notes by tag">
+            <FilterChip active={filter === 'all'} onClick={() => setFilter('all')} label="All" count={notes.records.length} />
             {TAGS.map((t) => (
-              <li key={t} className={TAG_META[t].text}>
-                {TAG_META[t].label} {counts[t]}
-              </li>
+              <FilterChip
+                key={t}
+                active={filter === t}
+                onClick={() => setFilter(t)}
+                label={TAG_META[t].label}
+                count={counts[t]}
+                className={TAG_META[t].text}
+              />
             ))}
-          </ul>
+          </div>
         </div>
 
-        {notes.status === 'ready' && notes.records.length === 0 ? (
+        {notes.status === 'ready' && shown.length === 0 ? (
           <p className="py-10 text-center text-sm text-muted-foreground">
-            {open ? 'Waiting for the first note. Share the invite link with your testers.' : 'No notes in this session.'}
+            {notes.records.length > 0
+              ? 'No notes with this tag.'
+              : open
+                ? 'Waiting for the first note. Share the invite link with your testers.'
+                : 'No notes in this session.'}
           </p>
         ) : (
-          <ul className="divide-y divide-border">
-            {notes.records.map((n) => (
-              <li key={n.recordId} className="grid gap-2 py-4 sm:grid-cols-[110px_1fr]">
+          <ul className="divide-y divide-border" aria-live="polite">
+            {shown.map((n) => (
+              <li
+                key={n.recordId}
+                className={cn(
+                  'grid gap-2 px-2 py-4 sm:grid-cols-[110px_1fr]',
+                  Date.parse(n.createdAt) > openedAt && 'animate-note-arrive',
+                )}
+              >
                 <div>
                   <TagChip tag={n.data.tag} />
                 </div>
@@ -103,6 +131,11 @@ export default function SessionPage() {
                   <p className="mt-1 font-mono text-xs text-muted-foreground">
                     {getName(n.data.testerId) ?? 'Tester'} · {timeAgo(n.createdAt)}
                   </p>
+                  {n.data.screenshotKey && (
+                    <div className="mt-2">
+                      <ScreenshotThumb feedbackId={n.recordId} />
+                    </div>
+                  )}
                 </div>
               </li>
             ))}
@@ -110,6 +143,22 @@ export default function SessionPage() {
         )}
       </section>
     </div>
+  )
+}
+
+function FilterChip(props: { active: boolean; onClick: () => void; label: string; count: number; className?: string }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={props.active}
+      onClick={props.onClick}
+      className={cn(
+        'rounded-sm border px-2 py-1 font-mono text-xs',
+        props.active ? 'border-foreground bg-foreground text-background' : cn('border-border hover:border-foreground', props.className),
+      )}
+    >
+      {props.label} {props.count}
+    </button>
   )
 }
 
