@@ -458,3 +458,15 @@ reload (`record.data.UserId` typo in the SDK's membership notifier).
 **What I'd do next:** normalize counts per tester; delete/rename for
 projects, builds and themes; remove teammates; a per-session upload cap;
 a lock around summarizing.
+
+## GitHub copy (2026-11-18)
+- Code pushed to https://github.com/Astriux/Playtest-Lab (remote `origin`,
+  branch `master`).
+- **DeepSpace stays the source of record.** The first deploy claimed DeepSpace
+  source permanently (`npx deepspace app source` → `deepspace`), and per the
+  source-control docs a claimed app ignores other remotes. So the GitHub remote
+  changes nothing about deploys.
+- Day to day: `npx deepspace deploy` pushes to DeepSpace's `space` remote on
+  its own; GitHub is updated by hand with `git push origin master`.
+- Checked before publishing: no secrets in tracked files (`.dev.vars`, the CLI
+  session and test-account passwords live outside the repo).
