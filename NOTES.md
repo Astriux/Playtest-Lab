@@ -390,3 +390,71 @@ to DeepSpace (`npx deepspace feedback`).
   delete-and-recreate. Unlikely in practice; a per-build lock would fix it.
 - The AI can still group imperfectly. That's why every number opens up to
   the notes behind it, and Re-summarize is one click.
+
+## Step 5: demo data, polish, auto-end sessions, final deploy (2026-11-18)
+
+### What was built
+- **Demo project** (`createDemoProject` action, data in
+  `src/demo/tower-defense.ts`). One click on the projects page creates
+  "Tower Defense (demo)" with the caller as its only dev: three builds,
+  closed sessions with 26 notes from four made-up testers ("Demo tester 1–4"),
+  and ready-made themes. It tells a deliberate story on the compare page:
+  - Wave 7 too hard 6 → 1 (balance fix worked)
+  - Crash when selling towers: gone (bug fix worked)
+  - Can't tell where towers go 3 → 4, despite "brighter placement grid" in
+    the changelog (the fix did **not** work, the case this app exists for)
+  - v0.6 has an open session with no notes, to try the tester flow.
+  Demo themes are written by hand so the demo is instant and free;
+  "Re-summarize" runs the real AI on them. The same notes are the fixture
+  for the AI test, so test input and demo can't drift apart.
+- **Auto-end sessions (the stretch goal).** A cron task (`src/cron.ts`) runs
+  every hour and ends any session still open 24 hours after it started, so a
+  forgotten session doesn't leave an invite link working forever. The invite
+  panel says "It ends on its own in about N hours." The "is it stale" check is
+  a pure function with unit tests (`src/lib/sessions.ts`).
+- **Polish:** projects page shows build count and latest version per
+  project; the landing page has a "who sees what" section; 404 page restyled;
+  build version placeholder no longer suggests an old version.
+- **README.md** for the repo: what it is, how to try it, which DeepSpace
+  feature does what and why, what was left out, what's next.
+
+### Tested
+- 15 unit tests (theme cleaning, comparison, session age) and 14 browser
+  tests pass, including a new `tests/demo.spec.ts` that checks the demo's
+  compare page shows ▼5, Gone, ▲1 and New on the right themes.
+- Real AI test re-run with the shared demo notes: 6 and 7 themes, 4 names
+  reused across builds.
+- Screenshots of demo project, compare page, landing and 404 reviewed.
+
+### Not verified
+- The hourly cron run itself. It is registered on deploy and the logic is
+  unit-tested, but a session has to be open for 24 hours before it does
+  anything visible. Check later with `npx deepspace logs --search cron`.
+
+## Final summary
+
+**Built:** a playtest feedback tool where the core question, "did my fix
+work?", is answered by a build-to-build comparison of AI-named themes.
+
+**Decisions worth explaining:**
+1. Access control is enforced by the server with DeepSpace's `team`
+   permission level, not by hiding things in the UI. Proven with a test that
+   records the raw WebSocket traffic for a dev, a tester and an outsider.
+2. The SDK source showed that list queries ignore `ownerField` for
+   `read: 'team'`. The design relies on the tester creating their own
+   feedback (through `submitFeedback`) so both code paths agree.
+3. Screenshots: the first plan (own R2 bucket) was refused at deploy on the
+   free tier. Switched to the tester's private built-in folder plus our own
+   checked route. Simpler, and tested so it can't be bypassed.
+4. Cross-build matching happens at summarize time: the AI sees last build's
+   theme names and reuses them. The compare page is then a simple, instant,
+   free name match. AI output is cleaned and its counts recomputed.
+5. User testing changed the UI: silently disabled buttons became dialogs
+   and "say what's missing" messages.
+
+**Known SDK issue:** a teammate who is added while the app is open needs one
+reload (`record.data.UserId` typo in the SDK's membership notifier).
+
+**What I'd do next:** normalize counts per tester; delete/rename for
+projects, builds and themes; remove teammates; a per-session upload cap;
+a lock around summarizing.

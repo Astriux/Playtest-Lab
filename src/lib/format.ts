@@ -11,6 +11,13 @@ export function timeAgo(iso: string): string {
   return new Date(iso).toLocaleDateString()
 }
 
+/** A tester's display name; the demo's made-up testers become "Demo tester N". */
+export function testerLabel(name: string | null, testerId: string): string {
+  if (name) return name
+  const demo = testerId.match(/^demo-tester-(\d+)$/)
+  return demo ? `Demo tester ${demo[1]}` : 'Tester'
+}
+
 export function inviteUrl(inviteCode: string): string {
   return `${window.location.origin}/join/${inviteCode}`
 }

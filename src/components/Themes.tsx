@@ -8,6 +8,7 @@ import { useQuery, useUserLookup, type RecordData } from 'deepspace'
 import { Button, useToast } from './ui'
 import { TAG_META, TagChip } from './Tag'
 import { callAction } from '../lib/actions'
+import { testerLabel } from '../lib/format'
 import { cn } from '../lib/utils'
 import { TAGS, type FeedbackData, type Tag, type ThemeData } from '../schemas/playtest-schemas'
 
@@ -35,7 +36,9 @@ export function ThemeNotes({ ids, notes }: { ids: string[]; notes: NotesById }) 
           <TagChip tag={n.data.tag} className="mt-0.5 shrink-0" />
           <span>
             {n.data.text}
-            <span className="ml-2 font-mono text-xs text-muted-foreground">{getName(n.data.testerId) ?? 'Tester'}</span>
+            <span className="ml-2 font-mono text-xs text-muted-foreground">
+              {testerLabel(getName(n.data.testerId), n.data.testerId)}
+            </span>
           </span>
         </li>
       ))}

@@ -218,7 +218,7 @@ function AddBuildForm({ projectId }: { projectId: string }) {
         id="build-version"
         value={version}
         onChange={(e) => setVersion(e.target.value)}
-        placeholder="v0.5"
+        placeholder="e.g. v1.2 or 2026-11-18"
         maxLength={40}
         aria-invalid={missing || undefined}
         className="mt-1 font-mono"

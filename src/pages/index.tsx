@@ -51,6 +51,12 @@ const STEPS = [
   },
 ]
 
+const ACCESS = [
+  { who: 'Your team', what: 'Every note, screenshot, theme and build on the project. Add teammates by email.' },
+  { who: 'Testers', what: 'Only the build they were invited to, and only their own notes and screenshots.' },
+  { who: 'Everyone else', what: "Nothing. Not even whether a project or screenshot exists." },
+]
+
 export default function Landing() {
   const max = Math.max(...DEMO_ROWS.flatMap((r) => [r.before, r.after]))
 
@@ -143,6 +149,22 @@ export default function Landing() {
                 </li>
               ))}
             </ol>
+          </section>
+
+          <section className="border-t border-border py-16">
+            <h2 className="font-display text-2xl font-bold">Unreleased builds stay private</h2>
+            <dl className="mt-8 grid gap-8 md:grid-cols-3">
+              {ACCESS.map((row) => (
+                <div key={row.who}>
+                  <dt className="font-mono text-xs uppercase tracking-[0.18em] text-signal">{row.who}</dt>
+                  <dd className="mt-2 text-sm text-muted-foreground">{row.what}</dd>
+                </div>
+              ))}
+            </dl>
+            <p className="mt-8 max-w-2xl text-sm text-muted-foreground">
+              These rules are checked on the server for every note, screenshot and build, not just hidden in the
+              page.
+            </p>
           </section>
         </main>
 

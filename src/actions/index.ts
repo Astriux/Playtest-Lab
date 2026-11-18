@@ -25,6 +25,7 @@ import { isTeamMember } from '../server/access'
 import { clusterNotes } from '../server/summarize'
 import { cleanThemes, type RawTheme } from '../lib/themes'
 import type { ThemeData } from '../schemas/playtest-schemas'
+import { DEMO_BUILDS, DEMO_PROJECT_NAME, demoTesterId } from '../demo/tower-defense'
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 
@@ -88,10 +89,8 @@ async function findSessionByCode(tools: ActionTools, code: unknown) {
 
 // ── Actions ──────────────────────────────────────────────────────────────────
 
-const createProject: ActionHandler<Env> = async ({ userId, params, tools }) => {
-  const name = cleanText(params.name, 80)
-  if (!name) return fail('Give the project a name (up to 80 characters).')
-
+/** Create a project with the caller as its first (and only) dev. */
+async function newProject(tools: ActionTools, userId: string, name: string): Promise<ActionResult<{ projectId: string }>> {
   // We pick the id ourselves so the project can point at its own team.
   const projectId = crypto.randomUUID()
   const project = await tools.create<ProjectData>('projects', { name, teamId: projectId }, projectId)
@@ -103,6 +102,70 @@ const createProject: ActionHandler<Env> = async ({ userId, params, tools }) => {
     memberId(projectId, userId),
   )
   if (!member.success) return member
+
+  return ok({ projectId })
+}
+
+const createProject: ActionHandler<Env> = async ({ userId, params, tools }) => {
+  const name = cleanText(params.name, 80)
+  if (!name) return fail('Give the project a name (up to 80 characters).')
+  return newProject(tools, userId, name)
+}
+
+/**
+ * Build the demo project (src/demo/tower-defense.ts) for the caller: three
+ * builds, sessions, notes from four made-up testers, and ready-made themes.
+ * The caller is its only dev, exactly like a project they made themselves.
+ */
+const createDemoProject: ActionHandler<Env> = async ({ userId, tools }) => {
+  const created = await newProject(tools, userId, DEMO_PROJECT_NAME)
+  if (!created.success) return created
+  const { projectId } = created.data
+
+  for (const demo of DEMO_BUILDS) {
+    const build = await tools.create<BuildData>('builds', {
+      projectId,
+      version: demo.version,
+      changelog: demo.changelog,
+    })
+    if (!build.success) return build
+    const buildId = build.data.recordId
+
+    const session = await tools.create<SessionData>('sessions', {
+      projectId,
+      buildId,
+      status: demo.sessionOpen ? 'open' : 'closed',
+      inviteCode: newInviteCode(),
+    })
+    if (!session.success) return session
+
+    const noteIds: string[] = []
+    for (const note of demo.notes) {
+      const res = await tools.create<FeedbackData>('feedback', {
+        projectId,
+        buildId,
+        sessionId: session.data.recordId,
+        testerId: demoTesterId(note.tester),
+        tag: note.tag,
+        text: note.text,
+        screenshotKey: '',
+      })
+      if (!res.success) return res
+      noteIds.push(res.data.recordId)
+    }
+
+    for (const theme of demo.themes) {
+      const res = await tools.create<ThemeData>('themes', {
+        projectId,
+        buildId,
+        name: theme.name,
+        summary: theme.summary,
+        count: theme.notes.length,
+        feedbackIds: theme.notes.map((i) => noteIds[i]),
+      })
+      if (!res.success) return res
+    }
+  }
 
   return ok({ projectId })
 }
@@ -332,6 +395,7 @@ const summarizeSession: ActionHandler<Env> = async ({ userId, params, tools, env
 export const actions: Record<string, ActionHandler<Env>> = {
   summarizeSession,
   createProject,
+  createDemoProject,
   addTeammate,
   addBuild,
   openSession,

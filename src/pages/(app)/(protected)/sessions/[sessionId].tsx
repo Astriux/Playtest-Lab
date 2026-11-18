@@ -12,7 +12,8 @@ import { ScreenshotThumb } from '../../../../components/Screenshot'
 import { ThemesPanel } from '../../../../components/Themes'
 import { TAG_META, TagChip } from '../../../../components/Tag'
 import { callAction } from '../../../../lib/actions'
-import { inviteUrl, timeAgo } from '../../../../lib/format'
+import { inviteUrl, testerLabel, timeAgo } from '../../../../lib/format'
+import { hoursLeft } from '../../../../lib/sessions'
 import { cn } from '../../../../lib/utils'
 import {
   TAGS,
@@ -81,7 +82,9 @@ export default function SessionPage() {
         </span>
       </div>
 
-      {open && <InvitePanel sessionId={sessionId} inviteCode={session.data.inviteCode} />}
+      {open && (
+        <InvitePanel sessionId={sessionId} inviteCode={session.data.inviteCode} openedAt={session.createdAt} />
+      )}
 
       <ThemesPanel
         projectId={projectId}
@@ -138,7 +141,7 @@ export default function SessionPage() {
                 <div>
                   <p className="text-sm">{n.data.text}</p>
                   <p className="mt-1 font-mono text-xs text-muted-foreground">
-                    {getName(n.data.testerId) ?? 'Tester'} · {timeAgo(n.createdAt)}
+                    {testerLabel(getName(n.data.testerId), n.data.testerId)} · {timeAgo(n.createdAt)}
                   </p>
                   {n.data.screenshotKey && (
                     <div className="mt-2">
@@ -171,8 +174,10 @@ function FilterChip(props: { active: boolean; onClick: () => void; label: string
   )
 }
 
-function InvitePanel({ sessionId, inviteCode }: { sessionId: string; inviteCode: string }) {
+function InvitePanel({ sessionId, inviteCode, openedAt }: { sessionId: string; inviteCode: string; openedAt: string }) {
   const [closing, setClosing] = useState(false)
+  const [now] = useState(() => Date.now())
+  const left = hoursLeft(openedAt, now)
   const { success, error } = useToast()
   const url = inviteUrl(inviteCode)
 
@@ -213,7 +218,8 @@ function InvitePanel({ sessionId, inviteCode }: { sessionId: string; inviteCode:
         </Button>
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
-        Anyone with the link can sign in and leave notes until you end the session.
+        Anyone with the link can sign in and leave notes until you end the session. It ends on its own{' '}
+        {left > 0 ? `in about ${left} ${left === 1 ? 'hour' : 'hours'}` : 'within the hour'}.
       </p>
     </div>
   )
