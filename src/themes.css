@@ -1,0 +1,36 @@
+/*
+ * Playtest Lab theme: a printed test report. Warm paper, ink type, hairline
+ * rules, and one loud signal color. Tag colors live in styles.css so every
+ * screen uses the same four.
+ *
+ * If you change --color-background, update the first-paint <style> in
+ * index.html to match.
+ */
+
+[data-theme="lab"] {
+  color-scheme: light;
+  --color-background: #f2eee5;
+  --color-foreground: #1c1b18;
+  --color-card: #faf8f3;
+  --color-card-foreground: #1c1b18;
+  --color-popover: #fffdf8;
+  --color-popover-foreground: #1c1b18;
+  --color-primary: #1c1b18;
+  --color-primary-foreground: #f7f4ed;
+  --color-secondary: #e8e3d7;
+  --color-secondary-foreground: #1c1b18;
+  --color-muted: #ebe6da;
+  --color-muted-foreground: #6b6558;
+  --color-accent: #e5dfd1;
+  --color-accent-foreground: #1c1b18;
+  --color-destructive: #b83a22;
+  --color-destructive-foreground: #ffffff;
+  --color-border: #d9d1c1;
+  --color-input: #cec5b3;
+  --color-ring: #e4572e;
+  --radius: 0.25rem;
+  --shadow-card: 0 1px 0 0 rgba(28, 27, 24, 0.06);
+  --shadow-card-hover: 0 2px 0 0 rgba(28, 27, 24, 0.1);
+  --color-shell: #ebe6da;
+  --color-shell-panel: #faf8f3;
+}
