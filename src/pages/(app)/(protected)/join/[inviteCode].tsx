@@ -78,7 +78,9 @@ function NoteForm({ inviteCode }: { inviteCode: string }) {
 
   async function send(e?: FormEvent) {
     e?.preventDefault()
-    if (!tag || !text.trim() || busy) return
+    if (busy) return
+    if (!tag) return setStatus({ ok: false, message: 'Pick a tag first.' })
+    if (!text.trim()) return setStatus({ ok: false, message: 'Write what happened.' })
     setBusy(true)
     setStatus(null)
     try {
@@ -137,7 +139,7 @@ function NoteForm({ inviteCode }: { inviteCode: string }) {
         >
           {status?.message ?? 'Ctrl + Enter to send'}
         </span>
-        <Button type="submit" loading={busy} disabled={!tag || !text.trim()}>
+        <Button type="submit" loading={busy}>
           Send note
         </Button>
       </div>

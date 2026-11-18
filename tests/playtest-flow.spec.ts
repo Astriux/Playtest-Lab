@@ -16,8 +16,12 @@ test('dev runs a session, tester leaves a note, outsider sees nothing', async ({
 
   // Dev: create project
   await dev.page.goto('/home')
-  await dev.page.getByLabel('New project name').fill(projectName)
-  await dev.page.getByRole('button', { name: 'New project' }).click()
+  await dev.page.getByRole('button', { name: /New project|Create your first project/ }).click()
+  // Submitting with no name explains what's missing instead of doing nothing
+  await dev.page.getByRole('button', { name: 'Create project' }).click()
+  await expect(dev.page.getByText('Enter a game name.')).toBeVisible()
+  await dev.page.getByLabel('Game name').fill(projectName)
+  await dev.page.getByRole('button', { name: 'Create project' }).click()
   await expect(dev.page).toHaveURL(/\/projects\/[\w-]+$/, { timeout: 15_000 })
   await expect(dev.page.getByRole('heading', { name: projectName })).toBeVisible()
   const projectUrl = new URL(dev.page.url()).pathname
@@ -39,6 +43,8 @@ test('dev runs a session, tester leaves a note, outsider sees nothing', async ({
   // Tester: join and leave a note
   await tester.page.goto(invitePath)
   await expect(tester.page.getByText(`Playtesting ${projectName}`)).toBeVisible({ timeout: 15_000 })
+  await tester.page.getByRole('button', { name: 'Send note' }).click()
+  await expect(tester.page.getByText('Pick a tag first.')).toBeVisible()
   await tester.page.getByRole('button', { name: 'Balance' }).click()
   await tester.page.getByLabel('What happened?').fill('Wave 7 wiped me out three times')
   await tester.page.getByRole('button', { name: 'Send note' }).click()

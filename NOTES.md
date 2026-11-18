@@ -158,3 +158,17 @@ Action tools skip collection permissions entirely, so each action checks:
   session and Ben's form disappears.
 - All 12 tests pass (`deepspace test run all`), plus `tsc` and `eslint`.
 - Screenshots of project, session, and join pages (desktop + phone) checked.
+
+### User testing: "I can't create a project" (2026-11-18)
+- **What happened:** testing the live app, I couldn't create a project. The
+  "New project" button was greyed out until a name was typed, and nothing
+  said so. The logs confirmed no request ever reached the server.
+- **Change:** "New project" (and "Create your first project" in the empty
+  state) now opens a dialog that asks for the game name. Buttons are no
+  longer disabled just because a field is empty. Pressing them explains
+  what's missing ("Enter a game name.", "Pick a tag first.").
+- **Applied the same rule** to Add build, Add teammate, and the tester's
+  Send note, which had the same silent greyed-out button.
+- **Rule going forward:** only disable a button while it's busy. Otherwise
+  let people press it and tell them what's missing.
+- Flow test now also checks both "what's missing" messages; all 12 tests pass.

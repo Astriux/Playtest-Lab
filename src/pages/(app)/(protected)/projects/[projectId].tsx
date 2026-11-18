@@ -163,10 +163,16 @@ function AddBuildForm({ projectId }: { projectId: string }) {
   const [version, setVersion] = useState('')
   const [changelog, setChangelog] = useState('')
   const [busy, setBusy] = useState(false)
+  const [missing, setMissing] = useState(false)
   const { error, success } = useToast()
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
+    if (!version.trim()) {
+      setMissing(true)
+      return
+    }
+    setMissing(false)
     setBusy(true)
     try {
       await callAction('addBuild', { projectId, version, changelog })
@@ -192,8 +198,10 @@ function AddBuildForm({ projectId }: { projectId: string }) {
         onChange={(e) => setVersion(e.target.value)}
         placeholder="v0.5"
         maxLength={40}
+        aria-invalid={missing || undefined}
         className="mt-1 font-mono"
       />
+      {missing && <p className="mt-1 text-sm text-destructive">Enter a version name, like v0.5.</p>}
       <Label htmlFor="build-changelog" className="mt-4 block">
         What changed
       </Label>
@@ -206,7 +214,7 @@ function AddBuildForm({ projectId }: { projectId: string }) {
         rows={3}
         className="mt-1"
       />
-      <Button type="submit" className="mt-4 w-full" loading={busy} disabled={!version.trim()}>
+      <Button type="submit" className="mt-4 w-full" loading={busy}>
         Add build
       </Button>
     </form>
@@ -222,6 +230,10 @@ function TeamPanel({ projectId }: { projectId: string }) {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
+    if (!email.trim()) {
+      error('Enter an email', "Type your teammate's email, then press Add.")
+      return
+    }
     setBusy(true)
     try {
       const { name } = await callAction<{ name: string }>('addTeammate', { projectId, email })
@@ -253,7 +265,7 @@ function TeamPanel({ projectId }: { projectId: string }) {
           placeholder="teammate@studio.com"
           aria-label="Teammate email"
         />
-        <Button type="submit" variant="outline" loading={busy} disabled={!email.trim()}>
+        <Button type="submit" variant="outline" loading={busy}>
           Add
         </Button>
       </form>

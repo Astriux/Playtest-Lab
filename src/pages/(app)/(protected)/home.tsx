@@ -6,12 +6,13 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from 'deepspace'
-import { Button, Input, useToast } from '@/components/ui'
+import { Button, Input, Label, Modal } from '@/components/ui'
 import { callAction } from '../../../lib/actions'
 import { timeAgo } from '../../../lib/format'
 import type { ProjectData } from '../../../schemas/playtest-schemas'
 
 export default function HomePage() {
+  const [creating, setCreating] = useState(false)
   const { records: projects, status } = useQuery<ProjectData>('projects', {
     orderBy: 'createdAt',
     orderDir: 'desc',
@@ -24,7 +25,7 @@ export default function HomePage() {
           <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted-foreground">Your lab</p>
           <h1 className="mt-2 font-display text-4xl font-extrabold tracking-tight">Projects</h1>
         </div>
-        <NewProjectForm />
+        {projects.length > 0 && <Button onClick={() => setCreating(true)}>New project</Button>}
       </div>
 
       {status === 'loading' ? (
@@ -35,6 +36,9 @@ export default function HomePage() {
           <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">
             A project is one game. It holds your builds and the playtest sessions you run on them.
           </p>
+          <Button className="mt-6" onClick={() => setCreating(true)}>
+            Create your first project
+          </Button>
         </div>
       ) : (
         <ul className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -53,41 +57,78 @@ export default function HomePage() {
           ))}
         </ul>
       )}
+
+      <NewProjectDialog open={creating} onClose={() => setCreating(false)} />
     </div>
   )
 }
 
-function NewProjectForm() {
+function NewProjectDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const navigate = useNavigate()
-  const { error } = useToast()
+
+  function close() {
+    setName('')
+    setError(null)
+    onClose()
+  }
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
+    // The button is never disabled: a greyed-out button with no reason is
+    // what confused people. Say what's missing instead.
+    if (!name.trim()) {
+      setError('Enter a game name.')
+      return
+    }
     setBusy(true)
+    setError(null)
     try {
       const { projectId } = await callAction<{ projectId: string }>('createProject', { name })
       navigate(`/projects/${projectId}`)
     } catch (err) {
-      error('Could not create project', (err as Error).message)
+      setError((err as Error).message)
       setBusy(false)
     }
   }
 
   return (
-    <form onSubmit={onSubmit} className="flex w-full gap-2 sm:w-auto">
-      <Input
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        placeholder="Game name, e.g. Tower Defense"
-        maxLength={80}
-        aria-label="New project name"
-        className="sm:w-64"
-      />
-      <Button type="submit" loading={busy} disabled={!name.trim()}>
-        New project
-      </Button>
-    </form>
+    <Modal open={open} onClose={close} size="sm">
+      <form onSubmit={onSubmit}>
+        <Modal.Header>
+          <Modal.Title className="font-display text-xl font-bold">New project</Modal.Title>
+          <Modal.Description>One project per game. You'll add builds to it next.</Modal.Description>
+        </Modal.Header>
+        <Modal.Body>
+          <Label htmlFor="project-name">Game name</Label>
+          <Input
+            id="project-name"
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Tower Defense"
+            maxLength={80}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? 'project-name-error' : undefined}
+            className="mt-1"
+          />
+          {error && (
+            <p id="project-name-error" role="alert" className="mt-2 text-sm text-destructive">
+              {error}
+            </p>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button type="button" variant="ghost" onClick={close} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" loading={busy}>
+            Create project
+          </Button>
+        </Modal.Footer>
+      </form>
+    </Modal>
   )
 }
