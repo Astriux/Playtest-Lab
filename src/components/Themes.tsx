@@ -6,6 +6,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useUserLookup, type RecordData } from 'deepspace'
 import { Button, useToast } from './ui'
+import { ClipLink } from './ClipLink'
 import { TAG_META, TagChip } from './Tag'
 import { callAction } from '../lib/actions'
 import { testerLabel } from '../lib/format'
@@ -39,6 +40,11 @@ export function ThemeNotes({ ids, notes }: { ids: string[]; notes: NotesById }) 
             <span className="ml-2 font-mono text-xs text-muted-foreground">
               {testerLabel(getName(n.data.testerId), n.data.testerId)}
             </span>
+            {n.data.clipUrl && (
+              <span className="ml-2">
+                <ClipLink url={n.data.clipUrl} />
+              </span>
+            )}
           </span>
         </li>
       ))}

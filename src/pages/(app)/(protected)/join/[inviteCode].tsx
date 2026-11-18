@@ -8,7 +8,8 @@ import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent } from
 import { useParams } from 'react-router-dom'
 import { useAuth, useQuery } from 'deepspace'
 import { ImagePlus, X } from 'lucide-react'
-import { Button, Textarea } from '@/components/ui'
+import { Button, Input, Textarea } from '@/components/ui'
+import { ClipLink } from '../../../../components/ClipLink'
 import { ScreenshotThumb } from '../../../../components/Screenshot'
 import { TAG_META, TagChip } from '../../../../components/Tag'
 import { callAction } from '../../../../lib/actions'
@@ -78,6 +79,7 @@ function NoteForm({ inviteCode }: { inviteCode: string }) {
   const [tag, setTag] = useState<Tag | null>(null)
   const [text, setText] = useState('')
   const [shot, setShot] = useState<Shot | null>(null)
+  const [clipUrl, setClipUrl] = useState('')
   const [busy, setBusy] = useState(false)
   // Inline status instead of toasts: on a phone a toast covers the Send button.
   const [status, setStatus] = useState<{ ok: boolean; message: string } | null>(null)
@@ -113,9 +115,10 @@ function NoteForm({ inviteCode }: { inviteCode: string }) {
     setBusy(true)
     setStatus(null)
     try {
-      await callAction('submitFeedback', { inviteCode, tag, text, screenshot: shot?.base64 })
+      await callAction('submitFeedback', { inviteCode, tag, text, screenshot: shot?.base64, clipUrl })
       setStatus({ ok: true, message: 'Sent. Keep them coming.' })
       setText('')
+      setClipUrl('')
       clearShot()
     } catch (err) {
       setStatus({ ok: false, message: (err as Error).message })
@@ -196,6 +199,19 @@ function NoteForm({ inviteCode }: { inviteCode: string }) {
         />
       </div>
 
+      <label htmlFor="clip-url" className="mt-4 block text-sm font-medium">
+        Clip link <span className="font-normal text-muted-foreground">(optional)</span>
+      </label>
+      <Input
+        id="clip-url"
+        inputMode="url"
+        value={clipUrl}
+        onChange={(e) => setClipUrl(e.target.value)}
+        placeholder="https://medal.tv/… or a YouTube / Streamable link"
+        maxLength={500}
+        className="mt-1"
+      />
+
       <div className="mt-4 flex items-center justify-between gap-4 border-t border-border pt-4">
         <span
           role="status"
@@ -232,6 +248,11 @@ function MyNotes({ sessionId }: { sessionId: string }) {
             <div className="min-w-0 flex-1">
               <p className="text-sm">{n.data.text}</p>
               <p className="mt-0.5 font-mono text-xs text-muted-foreground">{timeAgo(n.createdAt)}</p>
+              {n.data.clipUrl && (
+                <div className="mt-2">
+                  <ClipLink url={n.data.clipUrl} />
+                </div>
+              )}
               {n.data.screenshotKey && (
                 <div className="mt-2">
                   <ScreenshotThumb feedbackId={n.recordId} />

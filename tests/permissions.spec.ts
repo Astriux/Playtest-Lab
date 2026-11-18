@@ -110,6 +110,12 @@ test('dev sees all, tester sees only their own, outsider sees nothing', async ({
   const badShot = await act(ben, 'submitFeedback', { inviteCode, tag: 'bug', text: 'svg', screenshot: svg })
   expect(badShot.body.success).toBe(false)
 
+  // Clip links that could run code or skip https are refused.
+  for (const clipUrl of ['javascript:alert(document.cookie)', 'data:text/html,<script>alert(1)</script>', 'http://example.com/clip']) {
+    const res = await act(ben, 'submitFeedback', { inviteCode, tag: 'bug', text: 'clip', clipUrl })
+    expect(res.body, clipUrl).toMatchObject({ success: false })
+  }
+
   // ── Everyone opens every page, so the server is asked for everything ─────
   for (const u of [ava, ben, cy]) {
     for (const path of [`/projects/${projectId}`, `/sessions/${sessionId}`, `/join/${inviteCode}`]) {

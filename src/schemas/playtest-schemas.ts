@@ -87,6 +87,8 @@ export const feedbackSchema: CollectionSchema = {
     { name: 'tag', storage: 'text', interpretation: { kind: 'select', options: [...TAGS] } },
     { ...text('text'), required: true },
     text('screenshotKey'),
+    // Optional link to a gameplay clip hosted elsewhere (Medal, YouTube…).
+    { name: 'clipUrl', storage: 'text', interpretation: { kind: 'url' } },
   ],
   teamField: 'projectId',
   // 'team' = owner OR team member. The owner is the tester, not the creator.
@@ -126,6 +128,8 @@ export type FeedbackData = {
   tag: Tag
   text: string
   screenshotKey: string
+  /** '' or missing when there's no clip (older notes predate this field). */
+  clipUrl?: string
 }
 export type ThemeData = {
   projectId: string

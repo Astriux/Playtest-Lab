@@ -470,3 +470,29 @@ a lock around summarizing.
   its own; GitHub is updated by hand with `git push origin master`.
 - Checked before publishing: no secrets in tracked files (`.dev.vars`, the CLI
   session and test-account passwords live outside the repo).
+
+## Clip links instead of video uploads (2026-11-18)
+- **Question asked:** can testers attach video? DeepSpace's file storage would
+  accept it (any type except HTML/SVG/JS, up to 1 GiB per file), but the app's
+  whole file allowance is 128 MiB on the free plan. A handful of 10–50 MB
+  gameplay clips would fill it and then block screenshots for everyone.
+  Video would also need a different upload path than our small base64 images.
+- **Decision:** testers paste a link to a clip hosted elsewhere (Medal,
+  YouTube, Streamable…). Zero storage, and those sites already handle video
+  playback well.
+- **Built:** optional `clipUrl` on feedback (a new column; DeepSpace adds
+  columns automatically on deploy, older notes just have none), a "Clip link
+  (optional)" box on the tester form, and a "▶ Clip on medal.tv" link on notes
+  in the dev feed, the tester's own notes, and inside themes.
+- **Safety:** the server only stores `https://` links (max 500 characters), so
+  `javascript:` and `data:` links, the usual way a link becomes an attack, are
+  refused. The page checks again before making a link clickable, opens it in a
+  new tab with `noopener`, and always shows the site name so devs can see
+  where it goes. No allowlist of video sites: that would break whenever a
+  tester uses a site we didn't list. The tradeoff: a tester could post a link
+  to any https site. Testers are invited by the dev, and the visible site name
+  makes an odd link easy to spot.
+- **Tested:** the flow test sends a link without `https://` (clear error),
+  fixes it, and checks the dev sees "Clip on medal.tv" with the right address.
+  The permission test calls the server directly with `javascript:`, `data:`
+  and `http:` links, and all are refused. Full suite passes.

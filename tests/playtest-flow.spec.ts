@@ -56,6 +56,11 @@ test('dev runs a session, tester leaves a note, outsider sees nothing', async ({
     ),
   })
   await expect(tester.page.getByAltText('Screenshot to attach')).toBeVisible()
+  // A clip link without https:// is refused with a clear message, then fixed.
+  await tester.page.getByLabel('Clip link').fill('medal.tv/clips/wave7')
+  await tester.page.getByRole('button', { name: 'Send note' }).click()
+  await expect(tester.page.getByText(/Clip links must be a full https:\/\/ link/)).toBeVisible({ timeout: 15_000 })
+  await tester.page.getByLabel('Clip link').fill('https://medal.tv/clips/wave7')
   await tester.page.getByRole('button', { name: 'Send note' }).click()
   await expect(tester.page.getByRole('heading', { name: 'Your notes (1)' })).toBeVisible({ timeout: 15_000 })
 
@@ -65,6 +70,10 @@ test('dev runs a session, tester leaves a note, outsider sees nothing', async ({
   await expect(dev.page.getByRole('button', { name: 'View screenshot' }).locator('img')).toHaveAttribute('src', /^blob:/, {
     timeout: 15_000,
   })
+  await expect(dev.page.getByRole('link', { name: 'Clip on medal.tv' })).toHaveAttribute(
+    'href',
+    'https://medal.tv/clips/wave7',
+  )
 
   // Tester and outsider can't open the dev pages
   for (const other of [tester, outsider]) {

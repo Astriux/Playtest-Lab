@@ -8,6 +8,7 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useUserLookup } from 'deepspace'
 import { Button, useToast } from '@/components/ui'
+import { ClipLink } from '../../../../components/ClipLink'
 import { ScreenshotThumb } from '../../../../components/Screenshot'
 import { ThemesPanel } from '../../../../components/Themes'
 import { TAG_META, TagChip } from '../../../../components/Tag'
@@ -143,6 +144,11 @@ export default function SessionPage() {
                   <p className="mt-1 font-mono text-xs text-muted-foreground">
                     {testerLabel(getName(n.data.testerId), n.data.testerId)} · {timeAgo(n.createdAt)}
                   </p>
+                  {n.data.clipUrl && (
+                    <div className="mt-2">
+                      <ClipLink url={n.data.clipUrl} />
+                    </div>
+                  )}
                   {n.data.screenshotKey && (
                     <div className="mt-2">
                       <ScreenshotThumb feedbackId={n.recordId} />

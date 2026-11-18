@@ -50,6 +50,21 @@ function optionalText(value: unknown, max: number): string | null {
 /** One membership row per (project, user), so re-adding someone updates it. */
 const memberId = (projectId: string, userId: string) => `${projectId}_${userId}`
 
+/**
+ * Optional clip link: '' when absent, null when invalid. Only https links
+ * are kept, which rules out javascript:, data: and plain-http links.
+ */
+function readClipUrl(value: unknown): string | null {
+  const raw = optionalText(value, 500)
+  if (raw === null || raw === '') return raw
+  try {
+    const url = new URL(raw)
+    return url.protocol === 'https:' ? url.toString() : null
+  } catch {
+    return null
+  }
+}
+
 const MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024
 
 /**
@@ -277,6 +292,8 @@ const submitFeedback: ActionHandler<Env> = async ({ userId, params, tools, env }
   if (!TAGS.includes(tag)) return fail('Pick a tag: bug, balance, confusing, or fun.')
   const text = cleanText(params.text, 1000)
   if (!text) return fail('Write a note (up to 1000 characters).')
+  const clipUrl = readClipUrl(params.clipUrl)
+  if (clipUrl === null) return fail('Clip links must be a full https:// link, like https://medal.tv/…')
 
   const { projectId, buildId } = session.data
   const feedbackId = crypto.randomUUID()
@@ -297,7 +314,7 @@ const submitFeedback: ActionHandler<Env> = async ({ userId, params, tools, env }
 
   const res = await tools.create<FeedbackData>(
     'feedback',
-    { projectId, buildId, sessionId: session.recordId, testerId: userId, tag, text, screenshotKey },
+    { projectId, buildId, sessionId: session.recordId, testerId: userId, tag, text, screenshotKey, clipUrl },
     feedbackId,
   )
   if (!res.success) {

@@ -31,8 +31,10 @@ or disappeared ("Wave 7 too hard: 6 → 1").
 | Auto-end sessions | Cron task (`src/cron.ts`) | Sessions left open end on their own after 24 hours. |
 
 ## Left out on purpose
-Payments, chat, collaborative text editing, and video: none of them help
-answer "did my fix work?". Also no project/build deletion, per-tester
+Payments, chat, collaborative text editing, and video uploads: none of them
+help answer "did my fix work?". For motion, testers paste a clip link
+(Medal, YouTube, Streamable) instead. A few uploaded clips would fill the free
+plan's 128 MiB file allowance, and links cost nothing to store. Also no project/build deletion, per-tester
 upload caps, or per-tester rates on the compare page (see "What's next").
 
 ## What's next
