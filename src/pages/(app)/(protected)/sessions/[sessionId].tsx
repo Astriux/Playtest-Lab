@@ -9,6 +9,7 @@ import { Link, useParams } from 'react-router-dom'
 import { useQuery, useUserLookup } from 'deepspace'
 import { Button, useToast } from '@/components/ui'
 import { ScreenshotThumb } from '../../../../components/Screenshot'
+import { ThemesPanel } from '../../../../components/Themes'
 import { TAG_META, TagChip } from '../../../../components/Tag'
 import { callAction } from '../../../../lib/actions'
 import { inviteUrl, timeAgo } from '../../../../lib/format'
@@ -81,6 +82,14 @@ export default function SessionPage() {
       </div>
 
       {open && <InvitePanel sessionId={sessionId} inviteCode={session.data.inviteCode} />}
+
+      <ThemesPanel
+        projectId={projectId}
+        buildId={session.data.buildId}
+        sessionId={sessionId}
+        version={build?.data.version ?? ''}
+        sessionOpen={open}
+      />
 
       <section className="mt-10" aria-labelledby="notes-heading">
         <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-3 border-b-2 border-foreground pb-2">

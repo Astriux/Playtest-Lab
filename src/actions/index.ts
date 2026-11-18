@@ -22,6 +22,9 @@ import {
   type Tag,
 } from '../schemas/playtest-schemas'
 import { isTeamMember } from '../server/access'
+import { clusterNotes } from '../server/summarize'
+import { cleanThemes, type RawTheme } from '../lib/themes'
+import type { ThemeData } from '../schemas/playtest-schemas'
 
 // ── Small helpers ────────────────────────────────────────────────────────────
 
@@ -241,7 +244,93 @@ const submitFeedback: ActionHandler<Env> = async ({ userId, params, tools, env }
   return ok({ feedbackId })
 }
 
+const MAX_NOTES_TO_SUMMARIZE = 300
+
+/**
+ * Group a build's notes into themes with Claude. Team only.
+ *
+ * Themes belong to a build, not a session, so this groups every note on the
+ * session's build (all of its sessions) and replaces that build's themes.
+ * The previous build's theme names go into the prompt so the same issue
+ * keeps the same name, which is what makes build-to-build comparison work.
+ */
+const summarizeSession: ActionHandler<Env> = async ({ userId, params, tools, env }) => {
+  const sessionId = cleanText(params.sessionId, 64)
+  if (!sessionId) return fail('Missing session.')
+  const session = await tools.get<SessionData>('sessions', sessionId)
+  if (!session.success) return fail('Session not found.')
+  const { projectId, buildId, status } = session.data.record.data
+  if (!(await isTeamMember(tools, projectId, userId))) return fail('You are not on this project.')
+  if (status !== 'closed') return fail('End the session first, so no new notes arrive while themes are made.')
+
+  const [build, notesRes, buildsRes] = await Promise.all([
+    tools.get<BuildData>('builds', buildId),
+    tools.query<FeedbackData>('feedback', { where: { buildId }, orderBy: 'createdAt', limit: MAX_NOTES_TO_SUMMARIZE }),
+    tools.query<BuildData>('builds', { where: { projectId }, orderBy: 'createdAt', orderDir: 'asc' }),
+  ])
+  if (!build.success || !notesRes.success || !buildsRes.success) return fail('Could not load the notes.')
+  const notes = notesRes.data.records
+  if (notes.length === 0) return fail('No notes to summarize yet.')
+
+  // The newest earlier build that has themes is "the previous build".
+  const builds = buildsRes.data.records
+  const earlier = builds.slice(0, builds.findIndex((b) => b.recordId === buildId)).reverse()
+  let previousThemes: { name: string; summary: string }[] = []
+  for (const b of earlier) {
+    const res = await tools.query<ThemeData>('themes', { where: { buildId: b.recordId } })
+    if (res.success && res.data.records.length > 0) {
+      previousThemes = res.data.records.map((t) => ({ name: t.data.name, summary: t.data.summary }))
+      break
+    }
+  }
+
+  // Short ids (n1, n2…) for the model; we map them back afterwards.
+  const shortToReal = new Map(notes.map((n, i) => [`n${i + 1}`, n.recordId]))
+  let raw: RawTheme[]
+  try {
+    raw = await clusterNotes(env, {
+      version: build.data.record.data.version,
+      changelog: build.data.record.data.changelog,
+      previousThemes,
+      notes: notes.map((n, i) => ({ id: `n${i + 1}`, tag: n.data.tag, text: n.data.text })),
+    })
+  } catch (err) {
+    console.error('[summarizeSession] AI call failed:', err)
+    return fail("The AI couldn't group the notes right now. Try again in a minute.")
+  }
+  const themes = cleanThemes(
+    raw.map((t) => ({ ...t, noteIds: t.noteIds.map((id) => shortToReal.get(id) ?? '') })),
+    notes.map((n) => n.recordId),
+  )
+
+  // Replace this build's themes. deleteWhere removes at most 500 per call.
+  for (;;) {
+    const del = await tools.deleteWhere('themes', { buildId }, 500)
+    if (!del.success) return del
+    if (del.data.deleted < 500) break
+  }
+  for (const t of themes) {
+    const res = await tools.create<ThemeData>('themes', {
+      projectId,
+      buildId,
+      name: t.name,
+      summary: t.summary,
+      count: t.noteIds.length,
+      feedbackIds: t.noteIds,
+    })
+    if (!res.success) return res
+  }
+
+  const previousNames = new Set(previousThemes.map((t) => t.name))
+  return ok({
+    themeCount: themes.length,
+    noteCount: notes.length,
+    matchedPrevious: themes.filter((t) => previousNames.has(t.name)).length,
+  })
+}
+
 export const actions: Record<string, ActionHandler<Env>> = {
+  summarizeSession,
   createProject,
   addTeammate,
   addBuild,

@@ -313,3 +313,80 @@ to DeepSpace (`npx deepspace feedback`).
   and checks the dev sees the thumbnail.
 - Screenshots of the live feed (filters, thumbnails, glow) and the tester
   form with an attached image checked at desktop and phone width.
+
+## Step 4: AI summarize + build comparison (2026-11-18)
+
+### What was built
+- **`summarizeSession`** server action (`src/actions/index.ts`), team only:
+  1. Refuses if the caller isn't on the team, or the session is still open
+     (so notes don't keep arriving while themes are made).
+  2. Loads every note on the session's **build** (up to 300). Themes belong
+     to a build, so all of a build's sessions are grouped together.
+  3. Finds the **previous build's themes** (the newest earlier build that
+     has any) and puts their names and summaries in the prompt.
+  4. Calls Claude (`claude-sonnet-5-5`) through `createDeepSpaceAI`, with
+     structured output (a zod schema: `{ themes: [{ name, summary, noteIds }] }`).
+  5. Cleans the answer (`cleanThemes`), replaces the build's themes, and
+     reports how many names matched the previous build.
+- **The prompt** lives in `src/server/summarize.ts`. Key rules: specific
+  themes ("Wave 7 too hard", not "Difficulty"); every note in exactly one
+  theme; praise counts as a theme; **reuse a previous build's theme name
+  exactly when it's the same issue**; and treat note text as data, ignoring
+  instructions inside notes (testers write that text).
+- **Themes panel** on the session page: Summarize / Re-summarize button,
+  themes sorted by size, colored by their most common tag, each one
+  expandable to the exact notes behind it. It also says when new notes have
+  arrived since the themes were made.
+- **Compare page** `/projects/:id/compare` ("Did the fix work?"): pick a
+  before and after build (defaults to the latest two summarized), see
+  per-build totals (notes, testers, changelog), a summary line
+  (`1 down · 1 up · 3 new · 2 gone · 2 same`), and one row per theme with
+  before/after bars and a verdict. Open a row to see both builds' notes
+  side by side.
+- Project page: "Compare builds" button once two builds are summarized, and
+  a theme count on each build.
+
+### Why it's built this way
+- **Matching by name, with the AI choosing names.** The comparison is just
+  "same name = same issue" (`compareThemes`, ignoring case and spacing). The
+  hard part, deciding that "Wave 7 still a bit tough" is the same issue as
+  last build's "Wave 7 too hard", is done by the model *at summarize time*,
+  where it can read the notes. Simpler than asking the AI to compare two
+  builds at once, and the result is stored, so the compare page is instant
+  and free to reload.
+- **Never trust the model's bookkeeping.** `cleanThemes` (`src/lib/themes.ts`)
+  drops note ids the model invented, keeps each note in one theme, merges
+  duplicate names, puts skipped notes into "Other notes", and computes each
+  `count` from the notes rather than from the model. Notes are sent as short
+  ids (`n1`, `n2`…) and mapped back, which is cheaper and harder to garble.
+- **Praise flips the colors.** For a theme that's mostly "fun" notes, going
+  up is good (green) and going down is bad (red). For problems it's the
+  opposite. "Boss music is great" dropping isn't a win.
+- **No API key.** `createDeepSpaceAI(env, 'anthropic')` without a token bills
+  the app owner's DeepSpace credits. Any dev on the team can trigger it, which
+  is fine for a team tool; testers can't (tested).
+- **Counts are raw.** If v0.5 had half as many testers, fewer notes doesn't
+  mean a fix. The page shows notes and testers per build right above the
+  rows so the dev can judge. Per-tester rates would be the next step.
+
+### Tested
+- **Unit tests** (`src/lib/themes.test.ts`, 10 tests): invented ids, notes in
+  two themes, case-insensitive merging, leftovers, sorting, and every
+  comparison outcome.
+- **Real AI test** (`tests/summarize.spec.ts`, opt-in with `RUN_AI_TESTS=1`
+  because it spends credits), using realistic tower defense notes in
+  `tests/fixtures/tower-defense.ts`:
+  - Open session → refused; tester → refused; dev after ending → works.
+  - v0.4: 15 notes → 6 themes. v0.5: 11 notes → 7 themes, **4 names reused**
+    from v0.4 (wave 7, tower placement, boss music, chain-lightning).
+  - Compare page shows "Wave 7 too hard 6 → 1 ▼5", "Crash when selling
+    towers: gone", "Wave 12 boss too tanky: new". Opening the wave 7 row
+    shows the original notes.
+- Full suite: 13 unit + 13 browser tests pass (AI test skipped by default).
+
+### Limits
+- Up to 300 notes per build are summarized; beyond that the oldest 300 are used.
+- Two devs pressing Summarize at the same moment could interleave the
+  delete-and-recreate. Unlikely in practice; a per-build lock would fix it.
+- The AI can still group imperfectly. That's why every number opens up to
+  the notes behind it, and Re-summarize is one click.
