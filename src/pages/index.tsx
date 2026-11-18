@@ -85,7 +85,7 @@ export default function Landing() {
                 >
                   Start a project
                 </Link>
-                <span className="font-mono text-xs text-muted-foreground">Free while in beta</span>
+                <span className="font-mono text-xs text-muted-foreground">Testers join with a link</span>
               </div>
             </div>
 

@@ -86,4 +86,16 @@ works as a plain `<img src>`.
   so the whole data model reads top to bottom.
 
 ### Tested
-- `tsc --noEmit` and `eslint` pass.
+- `tsc --noEmit` and `eslint` pass; dev start prints no schema-lint warnings.
+- `deepspace test run all`: 11/11 pass (smoke, API, and the two-user test
+  where two `@deepspace.test` accounts each see their own signed-in session).
+- Checked landing and signed-out `/home` at desktop and phone width in a
+  browser; no console errors.
+- Test accounts created for later steps: `dev-ava`, `tester-ben`,
+  `outsider-cy` (all `@deepspace.test`; passwords saved locally by the CLI in
+  `~/.deepspace/test-accounts.json`, never in the repo).
+
+### Setup gotchas (Windows)
+- PowerShell blocks `npx.ps1`; use `npx.cmd deepspace ...` instead (no need to
+  change the execution policy).
+- `deepspace auth login` needs an interactive terminal.
