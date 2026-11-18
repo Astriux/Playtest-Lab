@@ -160,6 +160,17 @@ test('dev sees all, tester sees only their own, outsider sees nothing', async ({
   expect((await getShot(cy, benNoteId)).status).toBe(404)
   expect((await getShot(cy, benNoteId, false)).status).toBe(401)
 
+  // The file sits in Ben's private folder of the built-in storage. Even with
+  // its exact key, the built-in /api/files route serves it to Ben only, so
+  // the team's only way in is our checked route above.
+  const key = frames.ava.join('\n').match(new RegExp(`apps/[^"\\\\]*screenshots/${benNoteId}`))?.[0]
+  expect(key, 'screenshot key in the dev data').toBeTruthy()
+  const direct = (u: MultiplayerUser) =>
+    u.page.evaluate(async (k) => (await fetch(`/api/files/${k}?scope=self`)).status, key!)
+  expect(await direct(ben)).toBe(200)
+  expect(await direct(ava)).not.toBe(200)
+  expect(await direct(cy)).not.toBe(200)
+
   // ── 4. Adding Cy to the team grants access ───────────────────────────────
   await cy.page.goto(`/projects/${projectId}`)
   await expect(cy.page.getByRole('heading', { name: 'Project not found' })).toBeVisible({ timeout: 15_000 })

@@ -119,8 +119,6 @@ export interface Env extends DOBindings<typeof __DO_MANIFEST__> {
    * an authenticated app owner/admin. deepspace dev/test set it locally.
    */
   ALLOW_DEBUG_ROUTES?: string
-  /** Private screenshot storage (wrangler.toml [[r2_buckets]]). */
-  SCREENSHOTS: R2Bucket
 }
 
 export type AppContext = { Bindings: Env }

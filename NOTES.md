@@ -208,18 +208,19 @@ What this means for Playtest Lab:
 ## Step 3: screenshots, live feed, permission proof (2026-11-18)
 
 ### What was built
-- **Private screenshot storage.** A dedicated R2 bucket (`SCREENSHOTS` in
-  `wrangler.toml`, `bucket_name = "auto"` so DeepSpace creates it on deploy).
-  Only the worker can reach it; there is no public URL.
+- **Private screenshot storage** using DeepSpace's built-in file storage,
+  in the *tester's own private folder* (`'self'` scope).
   - Upload rides along with `submitFeedback`. The server decodes the image,
     checks its first bytes to confirm it really is JPEG / PNG / WebP (not
-    what the browser claims), caps it at 2 MB, and stores it under
-    `screenshots/<projectId>/<feedbackId>`. If saving the note fails, the
-    image is deleted again.
+    what the browser claims), caps it at 2 MB, and stores it with
+    `appFiles(env, { scope: 'self', userId })` from `deepspace/worker`. If
+    saving the note fails, the image is deleted again.
   - Viewing goes through `GET /api/screenshots/:feedbackId`
     (`src/server/screenshot-routes.ts`). It allows the tester who wrote the
-    note or an active team member, and answers 404 to everyone else, so an
-    outsider can't even tell whether a screenshot exists.
+    note or an active team member, then reads the file from the tester's
+    folder *as the app* (using the `testerId` the server stored on the note).
+    Everyone else gets 404, so an outsider can't even tell whether a
+    screenshot exists.
   - The browser shrinks images to 1600px and re-encodes them as JPEG before
     upload. A 4K screenshot drops to a few hundred KB, and hidden metadata
     (like GPS location from a phone photo) is stripped.
@@ -232,13 +233,27 @@ What this means for Playtest Lab:
   `canReadFeedback`), used by both the actions and the screenshot route, so
   there is one definition of "who may see this".
 
-### Why a custom bucket instead of the built-in file storage
-`useR2Files` offers `'self'` (only the uploader) or `'app'` (anyone with the
-URL). Devs couldn't see `'self'` screenshots, and `'app'` would make
-screenshots of unreleased games public. StoryNest uses `'app'` on purpose
-because its books are meant to be shared; our case is the opposite. The cost
-is ~40 lines of our own route plus an access check we have to get right, which
-the permission test covers.
+### How the screenshot design changed (and why)
+The question from step 1: built-in storage has `'self'` (only the uploader
+can read) or `'app'` (anyone with the URL). Devs can't open a tester's
+`'self'` file directly, and `'app'` would make screenshots of unreleased games
+public. StoryNest uses `'app'` on purpose because its books are meant to be
+shared; our case is the opposite.
+
+1. **First plan: our own private R2 bucket** (`[[r2_buckets]]` in
+   `wrangler.toml`). It worked locally and passed every test, but **deploy was
+   refused**: custom bindings need an admin-tier DeepSpace account, and this
+   account is free tier. The custom-bindings docs page doesn't mention that.
+2. **What shipped: `'self'` storage + our own gate.** `appFiles` lets the
+   worker read or write *any user's* private folder, as long as it passes a
+   user id the app verified itself. So the file stays in the tester's private
+   folder (the built-in `/api/files` route serves it to them alone), and our
+   route serves it to the team after the same membership check the actions
+   use. Simpler than a bucket (no binding, no extra resource) and it runs on
+   the free tier.
+
+Cost: screenshots count against the owner's file allowance (128 MiB on the
+free plan, roughly 400–600 shrunk screenshots).
 
 ### Permission proof: `tests/permissions.spec.ts`
 Three real accounts: **Ava** (dev on the team), **Ben** (tester via invite
@@ -260,6 +275,9 @@ link), **Cy** (outsider). Checked at the server, not the UI:
    note's screenshot, which he couldn't if it had been saved as Ava's.
 4. **Bad files:** an SVG with a `<script>` sent as a "screenshot" is refused.
 5. **Screenshot route:** Ava 200 `image/png`, Ben 200, Cy 404, signed-out 401.
+   And going around our route: with the file's exact storage key, the
+   built-in `/api/files` route serves it to Ben only. Ava and Cy are refused,
+   so the team's only way to a screenshot is our checked route.
 6. **Granting access works:** after Ava adds Cy to the team, Cy can open the
    project and fetch the screenshot.
 
@@ -285,6 +303,9 @@ to DeepSpace (`npx deepspace feedback`).
   playtests; a per-session cap would be the next step.
 - Images are fetched with the sign-in token and shown via a local blob URL,
   because a plain `<img src>` can't send the token.
+- A tester can delete their own screenshot file through the built-in file
+  API (it's in their folder). The note stays; the thumbnail just stops
+  loading. Acceptable: it's their own upload.
 
 ### Tested
 - All 13 tests pass (`deepspace test run all`), including the new permission

@@ -10,6 +10,7 @@
  * from `params` without checking them.
  */
 
+import { appFiles } from 'deepspace/worker'
 import type { ActionHandler, ActionResult, ActionTools } from 'deepspace/worker'
 import type { Env } from '../../worker'
 import {
@@ -52,9 +53,9 @@ const MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024
  * not from anything the browser claims. Only JPEG, PNG and WebP pass, so
  * nothing that a browser would run (HTML, SVG) can be stored.
  */
-function readScreenshot(value: unknown): { bytes: Uint8Array; type: string } | null {
+function readScreenshot(value: unknown): { bytes: Uint8Array<ArrayBuffer>; type: string } | null {
   if (typeof value !== 'string' || value.length > (MAX_SCREENSHOT_BYTES * 4) / 3 + 4) return null
-  let bytes: Uint8Array
+  let bytes: Uint8Array<ArrayBuffer>
   try {
     bytes = Uint8Array.from(atob(value), (ch) => ch.charCodeAt(0))
   } catch {
@@ -213,14 +214,19 @@ const submitFeedback: ActionHandler<Env> = async ({ userId, params, tools, env }
 
   const { projectId, buildId } = session.data
   const feedbackId = crypto.randomUUID()
+  // The tester's own private folder ('self' scope): nobody else can open it
+  // directly. The team sees it only through /api/screenshots, which checks.
+  const files = appFiles(env, { scope: 'self', userId })
   let screenshotKey = ''
 
   if (params.screenshot) {
     const shot = readScreenshot(params.screenshot)
     if (!shot) return fail('Screenshots must be a JPEG, PNG or WebP image under 2 MB.')
     if (shot.bytes.length > MAX_SCREENSHOT_BYTES) return fail('That screenshot is over 2 MB.')
-    screenshotKey = `screenshots/${projectId}/${feedbackId}`
-    await env.SCREENSHOTS.put(screenshotKey, shot.bytes, { httpMetadata: { contentType: shot.type } })
+    const stored = await files.upload(new Blob([shot.bytes], { type: shot.type }), {
+      key: `screenshots/${feedbackId}`,
+    })
+    screenshotKey = stored.key
   }
 
   const res = await tools.create<FeedbackData>(
@@ -229,7 +235,7 @@ const submitFeedback: ActionHandler<Env> = async ({ userId, params, tools, env }
     feedbackId,
   )
   if (!res.success) {
-    if (screenshotKey) await env.SCREENSHOTS.delete(screenshotKey)
+    if (screenshotKey) await files.delete(screenshotKey)
     return res
   }
   return ok({ feedbackId })
