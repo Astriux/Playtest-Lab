@@ -522,3 +522,38 @@ a lock around summarizing.
   the owner deletes, the project page, invite link, screenshot route and the
   stored screenshot file are all gone. Demo test deletes the demo through the
   UI, including a wrong-name attempt. Full suite passes.
+
+## Remove teammates and delete single builds (2026-11-19)
+- **`removeTeammate` action:** the owner can remove any teammate; any other
+  dev can remove only themselves ("Leave"). The owner can't be removed or
+  leave, so a project always has someone who can delete it. Removing deletes
+  that person's `team_members` row.
+- **Does removal cut off a page that's already open?** Checked the SDK
+  source: every live update re-checks team membership against the
+  `team_members` table at the moment it's sent (`broadcastChange` →
+  `isTeamMember`). So a removed dev gets nothing new from that instant, even
+  on an open tab. What was already on their screen stays until they reload
+  (the same SDK `UserId` bug from step 3 means their page isn't told to
+  refresh). The screenshot route also checks membership on every request,
+  so screenshots stop at once too.
+- **`deleteBuild` action:** owner only, the same rule as deleting the
+  project: anything that destroys testers' notes is the owner's call. It
+  deletes that build's screenshot files, notes, themes and sessions (so its
+  invite links stop working), then the build. Same safe-to-press-again order.
+  The shared parts (`ownerOnly`, `deleteScreenshots`) are now helpers used by
+  both delete actions.
+- **UI:** owner sees a small "Delete build…" link on each build, with a
+  confirm dialog that says how many sessions and notes go with it. No name
+  typing here: a build is smaller than a project. In the Team panel the owner
+  sees "Remove" next to each teammate, and other devs see "Leave" next to
+  their own name ("you"). Both ask once more inside the row ("Yes, remove").
+  The compare page already falls back to other builds if one disappears.
+- **Tested:** permission test, new parts: a non-owner dev and a tester are
+  refused for deleteBuild, deleteProject and removeTeammate. Deleting one
+  build kills its invite link and screenshot but leaves the other build, its
+  link and its screenshot alone. A dev can leave. The owner removes Cy through
+  the UI while Cy's project page is open. Positive control: Cy received a new
+  build live just before. After removal, a new build is never sent to Cy's
+  open page (checked in the raw WebSocket frames), and on reload he gets
+  "Project not found" and a 404 for screenshots. Demo test deletes the v0.6
+  build through the UI. Full suite passes (15 unit, 14 browser).

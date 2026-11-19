@@ -91,6 +91,7 @@ export default function ProjectPage() {
                   sessions={sessions.records.filter((s) => s.data.buildId === build.recordId)}
                   notesPerSession={notesPerSession}
                   themeCount={themesPerBuild.get(build.recordId) ?? 0}
+                  isOwner={project.createdBy === userId}
                 />
               ))}
             </ol>
@@ -123,11 +124,13 @@ function BuildCard({
   sessions,
   notesPerSession,
   themeCount,
+  isOwner,
 }: {
   build: RecordData<BuildData>
   sessions: RecordData<SessionData>[]
   notesPerSession: Map<string, number>
   themeCount: number
+  isOwner: boolean
 }) {
   const [busy, setBusy] = useState(false)
   const navigate = useNavigate()
@@ -157,9 +160,19 @@ function BuildCard({
             <p className="mt-3 whitespace-pre-line text-sm text-muted-foreground">{build.data.changelog}</p>
           )}
         </div>
-        <Button variant="outline" size="sm" loading={busy} onClick={startSession}>
-          Open playtest session
-        </Button>
+        <div className="flex flex-col items-end gap-1">
+          <Button variant="outline" size="sm" loading={busy} onClick={startSession}>
+            Open playtest session
+          </Button>
+          {/* Only the owner sees this; the server checks it too. */}
+          {isOwner && (
+            <DeleteBuild
+              build={build}
+              sessions={sessions.length}
+              notes={sessions.reduce((sum, s) => sum + (notesPerSession.get(s.recordId) ?? 0), 0)}
+            />
+          )}
+        </div>
       </div>
 
       {sessions.length > 0 && (
@@ -191,6 +204,72 @@ function BuildCard({
         </ul>
       )}
     </li>
+  )
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+
+/** "Delete build…" link plus its confirm dialog. Owner only. */
+function DeleteBuild(props: { build: RecordData<BuildData>; sessions: number; notes: number }) {
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
+  const { success } = useToast()
+  const { version } = props.build.data
+
+  function close() {
+    setOpen(false)
+    setProblem(null)
+  }
+
+  async function onDelete() {
+    setBusy(true)
+    setProblem(null)
+    try {
+      await callAction('deleteBuild', { buildId: props.build.recordId })
+      success('Build deleted', version)
+      // No need to close: the live list drops this build, and this dialog with it.
+    } catch (err) {
+      setProblem((err as Error).message)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="text-xs text-muted-foreground underline-offset-4 hover:text-destructive hover:underline"
+      >
+        Delete build…
+      </button>
+      <Modal open={open} onClose={close} size="sm">
+        <Modal.Header>
+          <Modal.Title className="font-display text-xl font-bold">Delete build {version}?</Modal.Title>
+          <Modal.Description>
+            This permanently removes {plural(props.sessions, 'session')} and{' '}
+            {plural(props.notes, 'note')}, with their screenshots and themes, for everyone. Invite
+            links for this build stop working. It can't be undone.
+          </Modal.Description>
+        </Modal.Header>
+        {problem && (
+          <Modal.Body>
+            <p role="alert" className="text-sm text-destructive">
+              {problem}
+            </p>
+          </Modal.Body>
+        )}
+        <Modal.Footer>
+          <Button type="button" variant="ghost" onClick={close} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="button" variant="destructive" loading={busy} onClick={onDelete}>
+            Delete build
+          </Button>
+        </Modal.Footer>
+      </Modal>
+    </>
   )
 }
 
@@ -268,7 +347,6 @@ function DeleteProject(props: {
   const navigate = useNavigate()
   const { success } = useToast()
   const { builds, sessions, notes } = props.counts
-  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
   function close() {
     setOpen(false)
@@ -345,6 +423,70 @@ function DeleteProject(props: {
   )
 }
 
+/**
+ * One teammate. The owner sees "Remove" on everyone else; anyone else sees
+ * "Leave" on their own row. Pressing it asks once more, right in the row.
+ */
+function TeamRow(props: { projectId: string; memberId: string; name: string; ownerId: string }) {
+  const { userId } = useAuth()
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const navigate = useNavigate()
+  const { error, success } = useToast()
+
+  const isOwnerRow = props.memberId === props.ownerId
+  const isMe = props.memberId === userId
+  const canRemove = !isOwnerRow && (userId === props.ownerId || isMe)
+  const verb = isMe ? 'Leave' : 'Remove'
+
+  async function remove() {
+    setBusy(true)
+    try {
+      await callAction('removeTeammate', { projectId: props.projectId, userId: props.memberId })
+      if (isMe) {
+        success('You left the project')
+        navigate('/home', { replace: true })
+      } else {
+        success('Teammate removed', props.name)
+      }
+    } catch (err) {
+      error(`Could not ${verb.toLowerCase()}`, (err as Error).message)
+      setBusy(false)
+      setConfirming(false)
+    }
+  }
+
+  return (
+    <li className="flex min-h-8 items-center justify-between gap-2">
+      <span className="min-w-0 truncate">
+        {props.name}
+        {isOwnerRow && <span className="ml-2 font-mono text-xs text-muted-foreground">owner</span>}
+        {isMe && !isOwnerRow && <span className="ml-2 font-mono text-xs text-muted-foreground">you</span>}
+      </span>
+      {canRemove &&
+        (confirming ? (
+          <span className="flex shrink-0 gap-1">
+            <Button size="sm" variant="ghost" onClick={() => setConfirming(false)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button size="sm" variant="destructive" loading={busy} onClick={remove}>
+              {isMe ? 'Yes, leave' : 'Yes, remove'}
+            </Button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            aria-label={isMe ? 'Leave this project' : `Remove ${props.name}`}
+            className="shrink-0 text-xs text-muted-foreground underline-offset-4 hover:text-destructive hover:underline"
+          >
+            {verb}
+          </button>
+        ))}
+    </li>
+  )
+}
+
 function TeamPanel({ projectId, ownerId }: { projectId: string; ownerId: string }) {
   const { records: members } = useQuery<TeamMemberData>('team_members', { where: { teamId: projectId } })
   const { getName } = useUserLookup()
@@ -378,10 +520,13 @@ function TeamPanel({ projectId, ownerId }: { projectId: string; ownerId: string 
       <p className="mt-1 text-xs text-muted-foreground">Devs see every note. Testers only see their own.</p>
       <ul className="mt-3 space-y-1 text-sm">
         {active.map((m) => (
-          <li key={m.recordId}>
-            {getName(m.data.userId) ?? 'Unknown user'}
-            {m.data.userId === ownerId && <span className="ml-2 font-mono text-xs text-muted-foreground">owner</span>}
-          </li>
+          <TeamRow
+            key={m.recordId}
+            projectId={projectId}
+            memberId={m.data.userId}
+            name={getName(m.data.userId) ?? 'Unknown user'}
+            ownerId={ownerId}
+          />
         ))}
       </ul>
       <form onSubmit={onSubmit} className="mt-4 flex gap-2">

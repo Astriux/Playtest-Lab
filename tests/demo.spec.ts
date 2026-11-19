@@ -30,9 +30,18 @@ test('demo project shows a full build comparison', async ({ users }) => {
   await expect(row('Wave 7 too hard')).toContainText('The flyers in wave 7 shred everything')
   await expect(row('Wave 7 too hard')).toContainText('Demo tester 4')
 
-  // The owner can delete it; the name must be typed to confirm.
+  // The owner can delete a single build: v0.6 and its live session go.
   await dev.page.getByRole('link', { name: /Tower Defense \(demo\)/ }).click()
   const projectUrl = new URL(dev.page.url()).pathname
+  const v06 = dev.page.locator('li').filter({ hasText: 'v0.6' }).first()
+  await v06.getByRole('button', { name: 'Delete build…' }).click()
+  await expect(dev.page.getByText('This permanently removes 1 session and 0 notes')).toBeVisible()
+  await dev.page.getByRole('button', { name: 'Delete build', exact: true }).click()
+  await expect(dev.page.getByText('v0.6', { exact: true })).toHaveCount(0, { timeout: 15_000 })
+  await expect(dev.page.getByText('Live session')).toHaveCount(0)
+  await expect(dev.page.getByText('v0.5', { exact: true })).toBeVisible()
+
+  // The owner can delete the whole project; the name must be typed to confirm.
   await dev.page.getByRole('button', { name: 'Delete project…' }).click()
   await dev.page.getByLabel('Type the project name to confirm').fill('wrong name')
   await dev.page.getByRole('button', { name: 'Delete project', exact: true }).click()

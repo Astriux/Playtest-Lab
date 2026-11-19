@@ -205,6 +205,30 @@ const addTeammate: ActionHandler<Env> = async ({ userId, params, tools }) => {
   return ok({ name: String(teammate.data.name ?? email) })
 }
 
+/**
+ * Take someone off a project's team. The owner can remove any teammate, and
+ * any teammate can remove themselves (leave). The owner can't be removed:
+ * the project would have nobody who can delete it. The removed person loses
+ * access at once, because every read and live update re-checks the team.
+ */
+const removeTeammate: ActionHandler<Env> = async ({ userId, params, tools }) => {
+  const projectId = cleanText(params.projectId, 64)
+  const target = cleanText(params.userId, 64)
+  if (!projectId || !target) return fail('Missing project or teammate.')
+  if (!(await isTeamMember(tools, projectId, userId))) return fail('You are not on this project.')
+  const project = await tools.get<ProjectData>('projects', projectId)
+  if (!project.success) return fail('Project not found.')
+  const ownerId = project.data.record.createdBy
+
+  if (target === ownerId) return fail("The owner can't be removed. Delete the project instead.")
+  if (target !== userId && userId !== ownerId) return fail('Only the project owner can remove teammates.')
+  if (!(await isTeamMember(tools, projectId, target))) return fail('That person is not on this project.')
+
+  const res = await deleteAll(tools, 'team_members', { teamId: projectId, userId: target })
+  if (!res.success) return res
+  return ok({ projectId, left: target === userId })
+}
+
 const addBuild: ActionHandler<Env> = async ({ userId, params, tools }) => {
   const projectId = cleanText(params.projectId, 64)
   const version = cleanText(params.version, 40)
@@ -334,6 +358,68 @@ async function deleteAll(tools: ActionTools, collection: string, where: Record<s
 }
 
 /**
+ * Delete the screenshot files of these notes. They live in each tester's
+ * private folder, not in the records, so deleting rows alone would leave them.
+ * Returns false if a file couldn't be deleted (one already gone is fine).
+ */
+async function deleteScreenshots(env: Env, notes: { data: FeedbackData }[]) {
+  for (const { data } of notes) {
+    if (!data.screenshotKey) continue
+    try {
+      await appFiles(env, { scope: 'self', userId: data.testerId }).delete(data.screenshotKey)
+    } catch (err) {
+      if (!(err instanceof AppFileError && err.status === 404)) {
+        console.error('[deleteScreenshots] failed:', err)
+        return false
+      }
+    }
+  }
+  return true
+}
+
+/**
+ * Only the project's owner (the dev who created it) may delete things that
+ * hold testers' notes. Returns an error message, or null if allowed.
+ * Non-members get the same answer whether or not the project exists.
+ */
+async function ownerOnly(tools: ActionTools, projectId: string, userId: string, what: string) {
+  if (!(await isTeamMember(tools, projectId, userId))) return 'You are not on this project.'
+  const project = await tools.get<ProjectData>('projects', projectId)
+  if (!project.success) return 'Project not found.'
+  if (project.data.record.createdBy !== userId) return `Only the project owner can delete ${what}.`
+  return null
+}
+
+const SCREENSHOT_DELETE_FAILED = 'Could not delete the screenshots. Nothing else was removed; try again.'
+
+/**
+ * Delete one build: its sessions (so their invite links stop working),
+ * notes, screenshots and themes. Owner only, like deleting the project, and
+ * in the same safe-to-press-again order: files, then child rows, then the build.
+ */
+const deleteBuild: ActionHandler<Env> = async ({ userId, params, tools, env }) => {
+  const buildId = cleanText(params.buildId, 64)
+  if (!buildId) return fail('Missing build.')
+  const build = await tools.get<BuildData>('builds', buildId)
+  if (!build.success) return fail('Build not found.')
+  const denied = await ownerOnly(tools, build.data.record.data.projectId, userId, 'a build')
+  if (denied) return fail(denied)
+
+  const notes = await tools.query<FeedbackData>('feedback', { where: { buildId } })
+  if (!notes.success) return notes
+  if (!(await deleteScreenshots(env, notes.data.records))) return fail(SCREENSHOT_DELETE_FAILED)
+
+  for (const collection of ['feedback', 'themes', 'sessions']) {
+    const res = await deleteAll(tools, collection, { buildId })
+    if (!res.success) return res
+  }
+  const removed = await tools.remove('builds', buildId)
+  if (!removed.success) return removed
+
+  return ok({ buildId, notes: notes.data.records.length })
+}
+
+/**
  * Delete a project and everything in it. Only the project's owner (the dev
  * who created it) may do this; other devs on the team can't.
  *
@@ -344,27 +430,12 @@ async function deleteAll(tools: ActionTools, collection: string, where: Record<s
 const deleteProject: ActionHandler<Env> = async ({ userId, params, tools, env }) => {
   const projectId = cleanText(params.projectId, 64)
   if (!projectId) return fail('Missing project.')
-  // Same answer for "doesn't exist" and "not yours to see".
-  if (!(await isTeamMember(tools, projectId, userId))) return fail('You are not on this project.')
-  const project = await tools.get<ProjectData>('projects', projectId)
-  if (!project.success) return fail('Project not found.')
-  if (project.data.record.createdBy !== userId) return fail('Only the project owner can delete it.')
+  const denied = await ownerOnly(tools, projectId, userId, 'it')
+  if (denied) return fail(denied)
 
-  // Screenshots live in each tester's private folder, not in the records.
   const notes = await tools.query<FeedbackData>('feedback', { where: { projectId } })
   if (!notes.success) return notes
-  for (const note of notes.data.records) {
-    const { screenshotKey, testerId } = note.data
-    if (!screenshotKey) continue
-    try {
-      await appFiles(env, { scope: 'self', userId: testerId }).delete(screenshotKey)
-    } catch (err) {
-      if (!(err instanceof AppFileError && err.status === 404)) {
-        console.error('[deleteProject] screenshot delete failed:', err)
-        return fail('Could not delete the screenshots. Nothing else was removed; try again.')
-      }
-    }
-  }
+  if (!(await deleteScreenshots(env, notes.data.records))) return fail(SCREENSHOT_DELETE_FAILED)
 
   for (const collection of ['feedback', 'themes', 'sessions', 'builds']) {
     const res = await deleteAll(tools, collection, { projectId })
@@ -465,7 +536,9 @@ export const actions: Record<string, ActionHandler<Env>> = {
   createProject,
   createDemoProject,
   deleteProject,
+  deleteBuild,
   addTeammate,
+  removeTeammate,
   addBuild,
   openSession,
   closeSession,

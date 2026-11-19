@@ -35,14 +35,23 @@ Payments, chat, collaborative text editing, and video uploads: none of them
 help answer "did my fix work?". For motion, testers paste a clip link
 (Medal, YouTube, Streamable) instead. A few uploaded clips would fill the free
 plan's 128 MiB file allowance, and links cost nothing to store. Also no
-deleting single builds, per-tester upload caps, or per-tester rates on the
-compare page (see "What's next").
+per-tester upload caps or per-tester rates on the compare page (see
+"What's next").
+
+## Who can do what
+- **Owner** (whoever created the project): everything, plus deleting builds
+  or the whole project and removing teammates.
+- **Dev** (added to the team): sees every note, adds builds, runs sessions,
+  summarizes, adds teammates, and can leave.
+- **Tester** (invite link only): sends notes and sees only their own.
+
+All of this is checked on the server; removing someone cuts off their live
+updates and screenshots at once.
 
 ## What's next
 - Normalize counts by number of testers, so a smaller playtest isn't
   mistaken for a fix.
-- Remove teammates and delete single builds (deleting a whole project is
-  done: owner only, with the name typed to confirm).
+- Hand ownership to another dev.
 - A per-session upload cap, and a lock so two devs can't summarize at once.
 - Let the dev rename or merge themes by hand when the AI groups imperfectly.
 
