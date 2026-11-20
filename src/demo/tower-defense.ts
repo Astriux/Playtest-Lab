@@ -1,10 +1,11 @@
 /**
  * Demo data: three builds of a tower defense game.
  *
- * The story it tells on the compare page (v0.4 → v0.5):
- * - "Wave 7 too hard" drops 6 → 1   (the balance fix worked)
+ * The story it tells on the compare page (v0.4 → v0.5, 4 testers each;
+ * the compare page counts testers, not notes):
+ * - "Wave 7 too hard": 4 of 4 testers → 1 of 4 (the balance fix worked)
  * - "Crash when selling towers" gone (the bug fix worked)
- * - "Can't tell where towers go" rises 3 → 4, even though the changelog
+ * - "Can't tell where towers go": 3 of 4 → 4 of 4, even though the changelog
  *   says "brighter placement grid" (the fix did NOT work; this is the
  *   case Playtest Lab exists to catch)
  * v0.6 has an open session and no notes, so the tester flow can be tried.

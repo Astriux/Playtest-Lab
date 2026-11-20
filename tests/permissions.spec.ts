@@ -68,7 +68,7 @@ function recordFrames(user: MultiplayerUser): string[] {
 }
 
 test('dev sees all, tester sees only their own, outsider sees nothing', async ({ users }) => {
-  test.setTimeout(180_000)
+  test.setTimeout(240_000)
   const [ava, ben, cy] = await users(['Ava (dev)', 'Ben (tester)', 'Cy (outsider)'])
   const run = Date.now().toString(36)
   const SECRET_PROJECT = `Secret project ${run}`
@@ -207,6 +207,8 @@ test('dev sees all, tester sees only their own, outsider sees nothing', async ({
     [ben, 'deleteProject', { projectId }, 'You are not on this project.'],
     [ben, 'deleteBuild', { buildId }, 'You are not on this project.'],
     [ben, 'removeTeammate', { projectId, userId: cy.userId }, 'You are not on this project.'],
+    [cy, 'transferOwnership', { projectId, userId: cy.userId }, 'Only the project owner can hand it over.'],
+    [ben, 'transferOwnership', { projectId, userId: ben.userId }, 'You are not on this project.'],
   ]
   for (const [u, name, params, error] of refusals) {
     expect((await act(u, name, params)).body, name).toMatchObject({ success: false, error })
@@ -218,6 +220,16 @@ test('dev sees all, tester sees only their own, outsider sees nothing', async ({
   const doomedNote = await act(ben, 'submitFeedback', { inviteCode: doomedInvite, tag: 'bug', text: 'doomed', screenshot: PNG_1PX })
   const doomedNoteId = doomedNote.body.data!.feedbackId
   expect((await getShot(ava, doomedNoteId)).status).toBe(200)
+
+  // Upload cap: 10 screenshots per tester per session. Ben has 1; 9 more fit,
+  // the 11th is refused, and a note without a screenshot still goes through.
+  for (let i = 0; i < 9; i++) {
+    const res = await act(ben, 'submitFeedback', { inviteCode: doomedInvite, tag: 'bug', text: `shot ${i}`, screenshot: PNG_1PX })
+    expect(res.body.success, `screenshot ${i + 2}`).toBe(true)
+  }
+  const overCap = await act(ben, 'submitFeedback', { inviteCode: doomedInvite, tag: 'bug', text: 'one too many', screenshot: PNG_1PX })
+  expect(overCap.body.error).toMatch(/You've sent 10 screenshots in this session/)
+  expect((await act(ben, 'submitFeedback', { inviteCode: doomedInvite, tag: 'bug', text: 'no shot' })).body.success).toBe(true)
 
   expect((await act(ava, 'deleteBuild', { buildId: doomedBuild })).body.success).toBe(true)
   expect((await getShot(ava, doomedNoteId)).status).toBe(404)
@@ -231,6 +243,11 @@ test('dev sees all, tester sees only their own, outsider sees nothing', async ({
   expect((await act(cy, 'removeTeammate', { projectId, userId: cy.userId })).body.success).toBe(true)
   expect((await act(cy, 'addBuild', { projectId, version: 'after-leaving' })).body.error).toBe('You are not on this project.')
   expect((await act(ava, 'addTeammate', { projectId, email: cy.email })).body.success).toBe(true)
+
+  // As a dev, Cy adds a build of his own. DeepSpace normally lets whoever
+  // created a row read it forever; this checks he loses it with the team.
+  const CY_BUILD = `v-made-by-cy-${run}`
+  expect((await act(cy, 'addBuild', { projectId, version: CY_BUILD })).body.success).toBe(true)
 
   // Cy watches the project page. Positive control: he receives a new build live.
   await cy.page.goto(`/projects/${projectId}`)
@@ -252,17 +269,50 @@ test('dev sees all, tester sees only their own, outsider sees nothing', async ({
   await cy.page.waitForTimeout(2000)
   expect(sent('cy', AFTER), 'removed teammate received a new build').toBe(false)
 
+  // On reload he gets nothing from the project, not even the build he made.
+  frames.cy.length = 0
   await cy.page.reload()
   await expect(cy.page.getByRole('heading', { name: 'Project not found' })).toBeVisible({ timeout: 15_000 })
+  await cy.page.waitForTimeout(1500)
+  expect(frames.cy.length, 'positive control: frames were recorded after reload').toBeGreaterThan(0)
+  for (const secret of [SECRET_PROJECT, CY_BUILD, BEFORE]) {
+    expect(sent('cy', secret), `removed dev received "${secret}"`).toBe(false)
+  }
   expect((await getShot(cy, benNoteId)).status).toBe(404)
 
-  // ── 8. The owner deletes the whole project ───────────────────────────────
-  expect((await act(ava, 'deleteProject', { projectId })).body.success).toBe(true)
+  // ── 8. The owner hands the project to another dev ────────────────────────
+  expect((await act(ava, 'addTeammate', { projectId, email: cy.email })).body.success).toBe(true)
+  await ava.page.reload()
+  await ava.page.getByRole('button', { name: /^Make .* the owner$/ }).click()
+  await ava.page.getByRole('button', { name: 'Yes, make owner' }).click()
+  // Ava's page updates live: she isn't the owner any more.
+  await expect(ava.page.getByRole('heading', { name: 'Delete project' })).toHaveCount(0, { timeout: 15_000 })
+  expect((await act(ava, 'deleteBuild', { buildId })).body.error).toBe('Only the project owner can delete a build.')
+  expect((await act(ava, 'transferOwnership', { projectId, userId: ava.userId })).body.error).toBe(
+    'Only the project owner can hand it over.',
+  )
+
+  // The new owner removes the old one. Ava CREATED the project and its first
+  // build, yet after removal the server sends her neither.
+  expect((await act(cy, 'removeTeammate', { projectId, userId: ava.userId })).body.success).toBe(true)
+  frames.ava.length = 0
+  await ava.page.reload()
+  await expect(ava.page.getByRole('heading', { name: 'Project not found' })).toBeVisible({ timeout: 15_000 })
+  await ava.page.waitForTimeout(1500)
+  expect(frames.ava.length, 'positive control: frames were recorded after reload').toBeGreaterThan(0)
+  // (She still sees her own note: she wrote it as a tester, and testers see their own.)
+  for (const secret of [SECRET_PROJECT, SECRET_VERSION, AFTER]) {
+    expect(sent('ava', secret), `removed creator received "${secret}"`).toBe(false)
+  }
+  expect((await getShot(ava, benNoteId)).status).toBe(404)
+
+  // ── 9. The new owner deletes the whole project ───────────────────────────
+  expect((await act(cy, 'deleteProject', { projectId })).body.success).toBe(true)
 
   // Everything is gone: the project, the invite link, and the screenshot file itself.
-  await ava.page.goto(`/projects/${projectId}`)
-  await expect(ava.page.getByRole('heading', { name: 'Project not found' })).toBeVisible({ timeout: 15_000 })
+  await cy.page.goto(`/projects/${projectId}`)
+  await expect(cy.page.getByRole('heading', { name: 'Project not found' })).toBeVisible({ timeout: 15_000 })
   expect((await act(ben, 'joinSession', { inviteCode })).body.error).toBe('This invite link is not valid.')
-  expect((await getShot(ava, benNoteId)).status).toBe(404)
+  expect((await getShot(cy, benNoteId)).status).toBe(404)
   expect(await direct(ben)).not.toBe(200)
 })

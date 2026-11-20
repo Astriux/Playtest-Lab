@@ -29,11 +29,19 @@ function act(user: MultiplayerUser, name: string, params: Record<string, unknown
   )
 }
 
-async function playtest(dev: MultiplayerUser, tester: MultiplayerUser, projectId: string, version: string, notes: FixtureNote[]) {
+/**
+ * Run one playtest. Notes are spread over the tester accounts the way the
+ * demo spreads them over its made-up testers, because the compare page
+ * measures themes by how many testers raised them.
+ */
+async function playtest(dev: MultiplayerUser, testers: MultiplayerUser[], projectId: string, version: string, notes: FixtureNote[]) {
+  const tester = testers[0]
   const build = await act(dev, 'addBuild', { projectId, version, changelog: '' })
   const session = await act(dev, 'openSession', { buildId: build.data!.buildId })
   const { sessionId, inviteCode } = session.data!
-  for (const n of notes) expect((await act(tester, 'submitFeedback', { inviteCode, ...n })).success).toBe(true)
+  for (const { tester: n, ...note } of notes) {
+    expect((await act(testers[n % testers.length], 'submitFeedback', { inviteCode, ...note })).success).toBe(true)
+  }
   // Summarizing an open session is refused.
   expect((await act(dev, 'summarizeSession', { sessionId })).error).toMatch(/End the session first/)
   await act(dev, 'closeSession', { sessionId })
@@ -46,21 +54,31 @@ async function playtest(dev: MultiplayerUser, tester: MultiplayerUser, projectId
 
 test('themes keep their names from one build to the next', async ({ users }) => {
   test.setTimeout(240_000)
-  const [dev, tester] = await users(['Ava (dev)', 'Ben (tester)'])
-  for (const u of [dev, tester]) await u.page.goto('/home')
+  const [dev, ben, cy] = await users(['Ava (dev)', 'Ben (tester)', 'Cy (outsider)'])
+  for (const u of [dev, ben, cy]) await u.page.goto('/home')
+  const testers = [ben, cy]
 
   const project = await act(dev, 'createProject', { name: `AI test ${Date.now().toString(36)}` })
   const projectId = project.data!.projectId
 
-  const v04 = await playtest(dev, tester, projectId, 'v0.4', V04_NOTES)
+  const v04 = await playtest(dev, testers, projectId, 'v0.4', V04_NOTES)
   expect(v04.noteCount).toBe(V04_NOTES.length)
   expect(v04.themeCount).toBeGreaterThanOrEqual(4)
 
-  const v05 = await playtest(dev, tester, projectId, 'v0.5', V05_NOTES)
+  const v05 = await playtest(dev, testers, projectId, 'v0.5', V05_NOTES)
   // Wave 7, tower placement and boss music are the same issues in both builds.
   expect(v05.matchedPrevious).toBeGreaterThanOrEqual(2)
 
   console.log(`AI summary: v0.4 ${v04.themeCount} themes, v0.5 ${v05.themeCount} themes, ${v05.matchedPrevious} reused names`)
+
+  // Two Summarize presses at the same moment: exactly one runs, the other is
+  // told to wait (the summarize_locks row, one per build).
+  const twice = await Promise.all([
+    act(dev, 'summarizeSession', { sessionId: v05.sessionId }),
+    act(dev, 'summarizeSession', { sessionId: v05.sessionId }),
+  ])
+  expect(twice.filter((r) => r.success), JSON.stringify(twice)).toHaveLength(1)
+  expect(twice.find((r) => !r.success)?.error).toMatch(/already summarizing this build/)
 
   // The session page lists the build's themes.
   const shots = process.env.SHOTS_DIR
@@ -74,7 +92,8 @@ test('themes keep their names from one build to the next', async ({ users }) => 
   await dev.page.goto(`/projects/${projectId}/compare`)
   await expect(dev.page.getByRole('heading', { name: 'Did the fix work?' })).toBeVisible({ timeout: 15_000 })
   const wave7 = dev.page.locator('li').filter({ hasText: /wave 7/i }).first()
-  await expect(wave7).toContainText('▼')
+  // Both testers hit wave 7 on v0.4; only one did on v0.5: 100% → 50%.
+  await expect(wave7).toContainText('▼ 50 pts')
   await wave7.locator('summary').click()
   await expect(wave7).toContainText('Wave 7 wiped me out three times in a row')
   if (shots) await dev.page.screenshot({ path: `${shots}/compare.png`, fullPage: true })

@@ -9,13 +9,14 @@ import { useAuth, useQuery, useUserLookup, type RecordData } from 'deepspace'
 import { Button, Input, Label, Modal, Textarea, useToast } from '@/components/ui'
 import { callAction } from '../../../../../lib/actions'
 import { timeAgo } from '../../../../../lib/format'
-import type {
-  BuildData,
-  FeedbackData,
-  ProjectData,
-  SessionData,
-  TeamMemberData,
-  ThemeData,
+import {
+  projectOwnerId,
+  type BuildData,
+  type FeedbackData,
+  type ProjectData,
+  type SessionData,
+  type TeamMemberData,
+  type ThemeData,
 } from '../../../../../schemas/playtest-schemas'
 
 export default function ProjectPage() {
@@ -46,6 +47,8 @@ export default function ProjectPage() {
     )
   }
 
+  const ownerId = projectOwnerId(project)
+  const isOwner = ownerId === userId
   const notesPerSession = new Map<string, number>()
   for (const f of feedback.records) {
     notesPerSession.set(f.data.sessionId, (notesPerSession.get(f.data.sessionId) ?? 0) + 1)
@@ -91,7 +94,7 @@ export default function ProjectPage() {
                   sessions={sessions.records.filter((s) => s.data.buildId === build.recordId)}
                   notesPerSession={notesPerSession}
                   themeCount={themesPerBuild.get(build.recordId) ?? 0}
-                  isOwner={project.createdBy === userId}
+                  isOwner={isOwner}
                 />
               ))}
             </ol>
@@ -100,9 +103,9 @@ export default function ProjectPage() {
 
         <aside className="space-y-8">
           <AddBuildForm projectId={projectId} />
-          <TeamPanel projectId={projectId} ownerId={project.createdBy} />
-          {/* The owner is whoever created the project. The server checks this too. */}
-          {project.createdBy === userId && (
+          <TeamPanel projectId={projectId} ownerId={ownerId} />
+          {/* Only the owner sees this. The server checks it too. */}
+          {isOwner && (
             <DeleteProject
               projectId={projectId}
               name={project.data.name}
@@ -424,36 +427,43 @@ function DeleteProject(props: {
 }
 
 /**
- * One teammate. The owner sees "Remove" on everyone else; anyone else sees
- * "Leave" on their own row. Pressing it asks once more, right in the row.
+ * One teammate. The owner sees "Make owner" and "Remove" on everyone else;
+ * anyone else sees "Leave" on their own row. Each asks once more in the row.
  */
 function TeamRow(props: { projectId: string; memberId: string; name: string; ownerId: string }) {
   const { userId } = useAuth()
-  const [confirming, setConfirming] = useState(false)
+  const [confirming, setConfirming] = useState<'remove' | 'owner' | null>(null)
   const [busy, setBusy] = useState(false)
   const navigate = useNavigate()
   const { error, success } = useToast()
 
   const isOwnerRow = props.memberId === props.ownerId
   const isMe = props.memberId === userId
-  const canRemove = !isOwnerRow && (userId === props.ownerId || isMe)
+  const iAmOwner = userId === props.ownerId
+  const canRemove = !isOwnerRow && (iAmOwner || isMe)
   const verb = isMe ? 'Leave' : 'Remove'
 
-  async function remove() {
+  async function act() {
     setBusy(true)
+    const params = { projectId: props.projectId, userId: props.memberId }
     try {
-      await callAction('removeTeammate', { projectId: props.projectId, userId: props.memberId })
-      if (isMe) {
-        success('You left the project')
-        navigate('/home', { replace: true })
+      if (confirming === 'owner') {
+        await callAction('transferOwnership', params)
+        success(`${props.name} owns the project now`, "You're still on the team as a dev.")
       } else {
+        await callAction('removeTeammate', params)
+        if (isMe) {
+          success('You left the project')
+          navigate('/home', { replace: true })
+          return
+        }
         success('Teammate removed', props.name)
       }
     } catch (err) {
-      error(`Could not ${verb.toLowerCase()}`, (err as Error).message)
-      setBusy(false)
-      setConfirming(false)
+      error(confirming === 'owner' ? 'Could not hand over the project' : `Could not ${verb.toLowerCase()}`, (err as Error).message)
     }
+    setBusy(false)
+    setConfirming(null)
   }
 
   return (
@@ -466,22 +476,39 @@ function TeamRow(props: { projectId: string; memberId: string; name: string; own
       {canRemove &&
         (confirming ? (
           <span className="flex shrink-0 gap-1">
-            <Button size="sm" variant="ghost" onClick={() => setConfirming(false)} disabled={busy}>
+            <Button size="sm" variant="ghost" onClick={() => setConfirming(null)} disabled={busy}>
               Cancel
             </Button>
-            <Button size="sm" variant="destructive" loading={busy} onClick={remove}>
-              {isMe ? 'Yes, leave' : 'Yes, remove'}
+            <Button
+              size="sm"
+              variant={confirming === 'owner' ? 'default' : 'destructive'}
+              loading={busy}
+              onClick={act}
+            >
+              {confirming === 'owner' ? 'Yes, make owner' : isMe ? 'Yes, leave' : 'Yes, remove'}
             </Button>
           </span>
         ) : (
-          <button
-            type="button"
-            onClick={() => setConfirming(true)}
-            aria-label={isMe ? 'Leave this project' : `Remove ${props.name}`}
-            className="shrink-0 text-xs text-muted-foreground underline-offset-4 hover:text-destructive hover:underline"
-          >
-            {verb}
-          </button>
+          <span className="flex shrink-0 gap-3">
+            {iAmOwner && (
+              <button
+                type="button"
+                onClick={() => setConfirming('owner')}
+                aria-label={`Make ${props.name} the owner`}
+                className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              >
+                Make owner
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setConfirming('remove')}
+              aria-label={isMe ? 'Leave this project' : `Remove ${props.name}`}
+              className="text-xs text-muted-foreground underline-offset-4 hover:text-destructive hover:underline"
+            >
+              {verb}
+            </button>
+          </span>
         ))}
     </li>
   )

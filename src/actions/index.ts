@@ -14,16 +14,18 @@ import { appFiles, AppFileError } from 'deepspace/worker'
 import type { ActionHandler, ActionResult, ActionTools } from 'deepspace/worker'
 import type { Env } from '../../worker'
 import {
+  projectOwnerId,
   TAGS,
   type BuildData,
   type FeedbackData,
   type ProjectData,
   type SessionData,
+  type SummarizeLockData,
   type Tag,
 } from '../schemas/playtest-schemas'
 import { isTeamMember } from '../server/access'
 import { clusterNotes } from '../server/summarize'
-import { cleanThemes, type RawTheme } from '../lib/themes'
+import { cleanThemeName, cleanThemes, mergeThemes as combineThemes, themeKey, type RawTheme } from '../lib/themes'
 import type { ThemeData } from '../schemas/playtest-schemas'
 import { DEMO_BUILDS, DEMO_PROJECT_NAME, demoTesterId } from '../demo/tower-defense'
 
@@ -68,6 +70,14 @@ function readClipUrl(value: unknown): string | null {
 const MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024
 
 /**
+ * Screenshot caps per playtest session. The free plan has 128 MiB of file
+ * storage for the whole app; screenshots are downscaled to about 0.2-0.5 MB,
+ * so one session can use at most roughly 25 MB, and one tester can't fill it.
+ */
+export const MAX_SHOTS_PER_SESSION = 50
+export const MAX_SHOTS_PER_TESTER = 10
+
+/**
  * Decode a base64 screenshot and work out its type from its first bytes,
  * not from anything the browser claims. Only JPEG, PNG and WebP pass, so
  * nothing that a browser would run (HTML, SVG) can be stored.
@@ -108,7 +118,7 @@ async function findSessionByCode(tools: ActionTools, code: unknown) {
 async function newProject(tools: ActionTools, userId: string, name: string): Promise<ActionResult<{ projectId: string }>> {
   // We pick the id ourselves so the project can point at its own team.
   const projectId = crypto.randomUUID()
-  const project = await tools.create<ProjectData>('projects', { name, teamId: projectId }, projectId)
+  const project = await tools.create<ProjectData>('projects', { name, teamId: projectId, ownerId: userId }, projectId)
   if (!project.success) return project
 
   const member = await tools.create(
@@ -218,7 +228,7 @@ const removeTeammate: ActionHandler<Env> = async ({ userId, params, tools }) => 
   if (!(await isTeamMember(tools, projectId, userId))) return fail('You are not on this project.')
   const project = await tools.get<ProjectData>('projects', projectId)
   if (!project.success) return fail('Project not found.')
-  const ownerId = project.data.record.createdBy
+  const ownerId = projectOwnerId(project.data.record)
 
   if (target === ownerId) return fail("The owner can't be removed. Delete the project instead.")
   if (target !== userId && userId !== ownerId) return fail('Only the project owner can remove teammates.')
@@ -227,6 +237,26 @@ const removeTeammate: ActionHandler<Env> = async ({ userId, params, tools }) => 
   const res = await deleteAll(tools, 'team_members', { teamId: projectId, userId: target })
   if (!res.success) return res
   return ok({ projectId, left: target === userId })
+}
+
+/**
+ * Hand the project to another dev on the team. Only the current owner can,
+ * and they stay on the team as a regular dev afterwards.
+ */
+const transferOwnership: ActionHandler<Env> = async ({ userId, params, tools }) => {
+  const projectId = cleanText(params.projectId, 64)
+  const target = cleanText(params.userId, 64)
+  if (!projectId || !target) return fail('Missing project or teammate.')
+  if (!(await isTeamMember(tools, projectId, userId))) return fail('You are not on this project.')
+  const project = await tools.get<ProjectData>('projects', projectId)
+  if (!project.success) return fail('Project not found.')
+  if (projectOwnerId(project.data.record) !== userId) return fail('Only the project owner can hand it over.')
+  if (target === userId) return fail('You already own this project.')
+  if (!(await isTeamMember(tools, projectId, target))) return fail('Add them to the team first.')
+
+  const res = await tools.update<ProjectData>('projects', projectId, { ownerId: target })
+  if (!res.success) return res
+  return ok({ projectId, ownerId: target })
 }
 
 const addBuild: ActionHandler<Env> = async ({ userId, params, tools }) => {
@@ -330,6 +360,8 @@ const submitFeedback: ActionHandler<Env> = async ({ userId, params, tools, env }
     const shot = readScreenshot(params.screenshot)
     if (!shot) return fail('Screenshots must be a JPEG, PNG or WebP image under 2 MB.')
     if (shot.bytes.length > MAX_SCREENSHOT_BYTES) return fail('That screenshot is over 2 MB.')
+    const capped = await screenshotCapReached(tools, session.recordId, userId)
+    if (capped) return fail(capped)
     const stored = await files.upload(new Blob([shot.bytes], { type: shot.type }), {
       key: `screenshots/${feedbackId}`,
     })
@@ -346,6 +378,24 @@ const submitFeedback: ActionHandler<Env> = async ({ userId, params, tools, env }
     return res
   }
   return ok({ feedbackId })
+}
+
+/**
+ * Has this session (or this tester in it) used up its screenshots? Returns
+ * the message to show, or null. Two uploads landing in the same instant could
+ * both pass at 49 and end at 51; a cap this loose doesn't need to be exact.
+ */
+async function screenshotCapReached(tools: ActionTools, sessionId: string, testerId: string) {
+  const res = await tools.query<FeedbackData>('feedback', { where: { sessionId } })
+  if (!res.success) return 'Could not check the screenshot limit. Try again.'
+  const shots = res.data.records.filter((n) => n.data.screenshotKey)
+  if (shots.length >= MAX_SHOTS_PER_SESSION) {
+    return `This session already has ${MAX_SHOTS_PER_SESSION} screenshots, the most it can hold. Send the note without one, or add a clip link.`
+  }
+  if (shots.filter((n) => n.data.testerId === testerId).length >= MAX_SHOTS_PER_TESTER) {
+    return `You've sent ${MAX_SHOTS_PER_TESTER} screenshots in this session, the most per tester. Send the note without one, or add a clip link.`
+  }
+  return null
 }
 
 /** Delete every row matching `where`; deleteWhere removes at most 500 per call. */
@@ -386,7 +436,7 @@ async function ownerOnly(tools: ActionTools, projectId: string, userId: string, 
   if (!(await isTeamMember(tools, projectId, userId))) return 'You are not on this project.'
   const project = await tools.get<ProjectData>('projects', projectId)
   if (!project.success) return 'Project not found.'
-  if (project.data.record.createdBy !== userId) return `Only the project owner can delete ${what}.`
+  if (projectOwnerId(project.data.record) !== userId) return `Only the project owner can delete ${what}.`
   return null
 }
 
@@ -468,6 +518,17 @@ const summarizeSession: ActionHandler<Env> = async ({ userId, params, tools, env
   if (!(await isTeamMember(tools, projectId, userId))) return fail('You are not on this project.')
   if (status !== 'closed') return fail('End the session first, so no new notes arrive while themes are made.')
 
+  const lock = await takeSummarizeLock(tools, projectId, buildId, userId)
+  if ('busy' in lock) return fail(lock.busy)
+  try {
+    return await summarizeBuild(tools, env, projectId, buildId)
+  } finally {
+    await tools.remove('summarize_locks', lock.lockId)
+  }
+}
+
+/** The summarize work itself, run while holding the build's lock. */
+async function summarizeBuild(tools: ActionTools, env: Env, projectId: string, buildId: string): Promise<ActionResult> {
   const [build, notesRes, buildsRes] = await Promise.all([
     tools.get<BuildData>('builds', buildId),
     tools.query<FeedbackData>('feedback', { where: { buildId }, orderBy: 'createdAt', limit: MAX_NOTES_TO_SUMMARIZE }),
@@ -531,8 +592,130 @@ const summarizeSession: ActionHandler<Env> = async ({ userId, params, tools, env
   })
 }
 
+// ── Summarize lock ───────────────────────────────────────────────────────────
+
+/** A lock older than this is left over from a crashed run and is ignored. */
+const LOCK_STALE_MS = 5 * 60 * 1000
+
+async function findLock(tools: ActionTools, buildId: string) {
+  const res = await tools.query<SummarizeLockData>('summarize_locks', { where: { buildId }, limit: 1 })
+  const lock = res.success ? res.data.records[0] : undefined
+  return lock && Date.now() - Date.parse(lock.createdAt) < LOCK_STALE_MS ? lock : null
+}
+
+async function userName(tools: ActionTools, userId: string) {
+  const res = await tools.get<{ name?: string }>('users', userId)
+  return (res.success && res.data.record.data.name) || 'A teammate'
+}
+
+/**
+ * Take the build's summarize lock. The record room creates rows one at a
+ * time and summarize_locks allows one row per build (uniqueOn), so if two
+ * devs press Summarize together exactly one create succeeds.
+ */
+async function takeSummarizeLock(
+  tools: ActionTools,
+  projectId: string,
+  buildId: string,
+  userId: string,
+): Promise<{ lockId: string } | { busy: string }> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await tools.create<SummarizeLockData>('summarize_locks', { projectId, buildId, userId })
+    if (res.success) return { lockId: res.data.recordId }
+    const held = await findLock(tools, buildId)
+    if (held) {
+      const who = held.data.userId === userId ? 'You are' : `${await userName(tools, held.data.userId)} is`
+      return { busy: `${who} already summarizing this build. Wait for it to finish.` }
+    }
+    // Stale or just released. Remove only stale rows (never a fresh lock
+    // another request took a moment ago), then try once more.
+    const all = await tools.query<SummarizeLockData>('summarize_locks', { where: { buildId } })
+    for (const old of all.success ? all.data.records : []) {
+      if (Date.now() - Date.parse(old.createdAt) >= LOCK_STALE_MS) await tools.remove('summarize_locks', old.recordId)
+    }
+  }
+  return { busy: 'Someone else is summarizing this build. Try again in a moment.' }
+}
+
+// ── Editing themes by hand ───────────────────────────────────────────────────
+
+/** Load a theme the caller may edit, or the reason they can't. */
+type Editable = { error: string } | { theme: { data: ThemeData }; id: string }
+
+async function editableTheme(tools: ActionTools, themeId: unknown, userId: string): Promise<Editable> {
+  const id = cleanText(themeId, 64)
+  const theme = id ? await tools.get<ThemeData>('themes', id) : null
+  if (!theme?.success) return { error: 'Theme not found.' }
+  const { projectId, buildId } = theme.data.record.data
+  if (!(await isTeamMember(tools, projectId, userId))) return { error: 'You are not on this project.' }
+  if (await findLock(tools, buildId)) {
+    return { error: 'This build is being summarized right now. Edit its themes when that finishes.' }
+  }
+  return { theme: theme.data.record, id: id! }
+}
+
+/** Is another theme on this build (outside `except`) already called `name`? */
+async function nameTaken(tools: ActionTools, buildId: string, name: string, except: string[]) {
+  const res = await tools.query<ThemeData>('themes', { where: { buildId } })
+  if (!res.success) return false
+  return res.data.records.some((t) => !except.includes(t.recordId) && themeKey(t.data.name) === themeKey(name))
+}
+
+/**
+ * Rename a theme. Also how a dev links a theme to the previous build's one:
+ * give it the same name and the compare page lines them up.
+ */
+const renameTheme: ActionHandler<Env> = async ({ userId, params, tools }) => {
+  const name = cleanThemeName(typeof params.name === 'string' ? params.name : '')
+  if (!name) return fail('Give the theme a name.')
+  const found = await editableTheme(tools, params.themeId, userId)
+  if ('error' in found) return fail(found.error)
+  if (await nameTaken(tools, found.theme.data.buildId, name, [found.id])) {
+    return fail(`This build already has a theme called "${name}". Select both and merge them instead.`)
+  }
+  const res = await tools.update<ThemeData>('themes', found.id, { name })
+  if (!res.success) return res
+  return ok({ themeId: found.id, name })
+}
+
+/**
+ * Merge two or more themes of one build into one. The first theme in the
+ * list is kept (renamed, with every note); the others are deleted.
+ */
+const mergeThemes: ActionHandler<Env> = async ({ userId, params, tools }) => {
+  const ids = Array.isArray(params.themeIds) ? [...new Set(params.themeIds)].slice(0, 50) : []
+  if (ids.length < 2) return fail('Pick at least two themes to merge.')
+  const name = cleanThemeName(typeof params.name === 'string' ? params.name : '')
+  if (!name) return fail('Give the merged theme a name.')
+
+  const themes: { theme: { data: ThemeData }; id: string }[] = []
+  for (const id of ids) {
+    const found = await editableTheme(tools, id, userId)
+    if ('error' in found) return fail(found.error)
+    themes.push(found)
+  }
+  const buildId = themes[0].theme.data.buildId
+  if (themes.some((t) => t.theme.data.buildId !== buildId)) return fail('Only themes from the same build can be merged.')
+  if (await nameTaken(tools, buildId, name, themes.map((t) => t.id))) {
+    return fail(`This build already has another theme called "${name}". Include it in the merge, or pick another name.`)
+  }
+
+  const [keep, ...rest] = themes
+  const merged = combineThemes(themes.map((t) => t.theme.data))
+  const res = await tools.update<ThemeData>('themes', keep.id, { name, ...merged, count: merged.feedbackIds.length })
+  if (!res.success) return res
+  for (const t of rest) {
+    const removed = await tools.remove('themes', t.id)
+    if (!removed.success) return removed
+  }
+  return ok({ themeId: keep.id, count: merged.feedbackIds.length })
+}
+
 export const actions: Record<string, ActionHandler<Env>> = {
   summarizeSession,
+  renameTheme,
+  mergeThemes,
+  transferOwnership,
   createProject,
   createDemoProject,
   deleteProject,

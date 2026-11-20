@@ -8,6 +8,7 @@ import { Seo } from '../components/Seo'
 import { Logo } from '../components/Logo'
 import { seo } from '../seo'
 
+/** before/after: percent of that build's testers who raised the theme. */
 type Row = {
   name: string
   tag: 'bug' | 'balance' | 'confusing' | 'fun'
@@ -16,10 +17,10 @@ type Row = {
 }
 
 const DEMO_ROWS: Row[] = [
-  { name: 'Wave 7 is too hard', tag: 'balance', before: 7, after: 1 },
-  { name: 'Crash when selling a tower', tag: 'bug', before: 3, after: 0 },
-  { name: "Can't tell where towers can go", tag: 'confusing', before: 4, after: 5 },
-  { name: 'Boss music goes hard', tag: 'fun', before: 0, after: 3 },
+  { name: 'Wave 7 is too hard', tag: 'balance', before: 100, after: 25 },
+  { name: 'Crash when selling a tower', tag: 'bug', before: 75, after: 0 },
+  { name: "Can't tell where towers can go", tag: 'confusing', before: 75, after: 100 },
+  { name: 'Boss music goes hard', tag: 'fun', before: 0, after: 50 },
 ]
 
 const TAG_COLOR: Record<Row['tag'], string> = {
@@ -32,8 +33,8 @@ const TAG_COLOR: Record<Row['tag'], string> = {
 function verdict(row: Row) {
   if (row.before === 0) return { label: 'new', className: 'text-tag-confusing' }
   if (row.after === 0) return { label: 'gone', className: 'text-tag-fun' }
-  if (row.after < row.before) return { label: `▼ ${row.before - row.after}`, className: 'text-tag-fun' }
-  return { label: `▲ ${row.after - row.before}`, className: 'text-tag-bug' }
+  if (row.after < row.before) return { label: `▼ ${row.before - row.after} pts`, className: 'text-tag-fun' }
+  return { label: `▲ ${row.after - row.before} pts`, className: 'text-tag-bug' }
 }
 
 const STEPS = [
@@ -47,7 +48,7 @@ const STEPS = [
   },
   {
     title: 'Compare against the last build',
-    body: 'AI groups the notes into themes and keeps the same names across builds, so you can see what went down, what went up, and what is new.',
+    body: 'AI groups the notes into themes and keeps the same names across builds, so you can see what went down, what went up, and what is new. Measured per tester, so a smaller playtest is not mistaken for a fix.',
   },
 ]
 
@@ -58,7 +59,6 @@ const ACCESS = [
 ]
 
 export default function Landing() {
-  const max = Math.max(...DEMO_ROWS.flatMap((r) => [r.before, r.after]))
 
   return (
     <>
@@ -120,14 +120,14 @@ export default function Landing() {
                         <span className="h-1.5 rounded-sm bg-muted">
                           <span
                             className="block h-full rounded-sm bg-foreground/30"
-                            style={{ width: `${(row.before / max) * 100}%` }}
+                            style={{ width: `${row.before}%` }}
                           />
                         </span>
                         <span>v0.5</span>
                         <span className="h-1.5 rounded-sm bg-muted">
                           <span
                             className={`block h-full rounded-sm ${TAG_COLOR[row.tag]}`}
-                            style={{ width: `${(row.after / max) * 100}%` }}
+                            style={{ width: `${row.after}%` }}
                           />
                         </span>
                       </div>

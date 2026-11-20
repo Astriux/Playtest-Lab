@@ -9,7 +9,14 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery, type RecordData } from 'deepspace'
 import { dominantTag, ThemeNotes, type NotesById } from '../../../../../components/Themes'
 import { TAG_META } from '../../../../../components/Tag'
-import { compareThemes, countChanges, type ComparisonRow } from '../../../../../lib/themes'
+import {
+  compareThemes,
+  countChanges,
+  FEW_TESTERS,
+  tallyThemes,
+  type ComparisonRow,
+  type Side,
+} from '../../../../../lib/themes'
 import { cn } from '../../../../../lib/utils'
 import type { BuildData, FeedbackData, ProjectData, ThemeData } from '../../../../../schemas/playtest-schemas'
 
@@ -66,12 +73,21 @@ export default function ComparePage() {
   const from = summarized.find((b) => b.recordId === fromId)!
   const to = summarized.find((b) => b.recordId === toId)!
 
-  const themesOf = (buildId: string): Theme[] =>
-    themes.records.filter((t) => t.data.buildId === buildId).map((t) => t.data)
-  const rows = compareThemes(themesOf(fromId), themesOf(toId))
+  // Who wrote each note, so themes can be measured in testers, not notes.
+  const testerOf = new Map(feedback.records.map((n) => [n.recordId, n.data.testerId]))
+  const testersOn = (buildId: string) =>
+    new Set(feedback.records.filter((n) => n.data.buildId === buildId).map((n) => n.data.testerId)).size
+  const tally = (buildId: string) => ({
+    testers: testersOn(buildId),
+    themes: tallyThemes(
+      themes.records.filter((t) => t.data.buildId === buildId).map((t) => t.data),
+      testerOf,
+    ),
+  })
+  const rows = compareThemes(tally(fromId), tally(toId))
   const changes = countChanges(rows)
-  const max = Math.max(1, ...rows.flatMap((r) => [r.before, r.after]))
   const notes: NotesById = new Map(feedback.records.map((n) => [n.recordId, n]))
+  const fewTesters = [from, to].filter((b) => testersOn(b.recordId) < FEW_TESTERS)
 
   function pick(which: 'from' | 'to', id: string) {
     const next = { from: fromId, to: toId, [which]: id }
@@ -96,6 +112,13 @@ export default function ComparePage() {
         <BuildTotals build={to} notes={feedback.records} />
       </div>
 
+      {fewTesters.length > 0 && (
+        <p className="mt-4 rounded border border-tag-balance/50 bg-card px-4 py-3 text-sm">
+          {fewTesters.map((b) => b.data.version).join(' and ')} had fewer than {FEW_TESTERS} testers. One person
+          changes the percentages a lot, so treat small moves with care.
+        </p>
+      )}
+
       <p className="mt-8 border-b-2 border-foreground pb-2 font-mono text-xs">
         {changes.down} down · {changes.up} up · {changes.new} new · {changes.gone} gone · {changes.same} same
       </p>
@@ -105,7 +128,6 @@ export default function ComparePage() {
           <CompareRow
             key={row.name}
             row={row}
-            max={max}
             notes={notes}
             fromVersion={from.data.version}
             toVersion={to.data.version}
@@ -114,8 +136,9 @@ export default function ComparePage() {
       </ul>
 
       <p className="mt-6 text-xs text-muted-foreground">
-        Counts are raw notes per theme. Themes match by name: the AI is given the previous build's theme names and
-        reuses one when it's the same issue. Open a theme to check which notes are behind each number.
+        Each bar is the share of that build's testers who raised the theme, so a smaller playtest doesn't look like
+        a fix. Moves under 10 points count as "same". Themes match by name: the AI reuses the previous build's names
+        for the same issue, and you can rename or merge themes on a session page. Open a theme to see its notes.
       </p>
     </div>
   )
@@ -162,12 +185,11 @@ function BuildTotals({ build, notes }: { build: RecordData<BuildData>; notes: Re
 
 function CompareRow(props: {
   row: ComparisonRow<Theme>
-  max: number
   notes: NotesById
   fromVersion: string
   toVersion: string
 }) {
-  const { row, max, notes } = props
+  const { row, notes } = props
   const beforeIds = row.beforeTheme?.feedbackIds ?? []
   const afterIds = row.afterTheme?.feedbackIds ?? []
   const tag = dominantTag([...beforeIds, ...afterIds], notes)
@@ -182,36 +204,43 @@ function CompareRow(props: {
             <span className="truncate font-medium">{row.name}</span>
           </span>
           <span className={cn('font-mono text-xs font-medium uppercase', v.className)}>{v.label}</span>
-          <span className="col-span-2 grid grid-cols-[3.5rem_1fr_2rem] items-center gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground">
+          <span className="col-span-2 grid grid-cols-[3.5rem_1fr_2.5rem] items-center gap-x-3 gap-y-1 font-mono text-[11px] text-muted-foreground">
             <span className="truncate">{props.fromVersion}</span>
-            <Bar value={row.before} max={max} className="bg-foreground/30" />
-            <span className="text-right">{row.before}</span>
+            <Bar rate={row.before.rate} className="bg-foreground/30" />
+            <span className="text-right">{percent(row.before.rate)}</span>
             <span className="truncate">{props.toVersion}</span>
-            <Bar value={row.after} max={max} className={TAG_META[tag].dot} />
-            <span className="text-right">{row.after}</span>
+            <Bar rate={row.after.rate} className={TAG_META[tag].dot} />
+            <span className="text-right">{percent(row.after.rate)}</span>
           </span>
         </summary>
         <div className="mt-4 grid gap-4 pl-4 sm:grid-cols-2">
-          <NotesColumn title={props.fromVersion} ids={beforeIds} notes={notes} />
-          <NotesColumn title={props.toVersion} ids={afterIds} notes={notes} />
+          <NotesColumn title={props.fromVersion} side={row.before} ids={beforeIds} notes={notes} />
+          <NotesColumn title={props.toVersion} side={row.after} ids={afterIds} notes={notes} />
         </div>
       </details>
     </li>
   )
 }
 
-function Bar({ value, max, className }: { value: number; max: number; className: string }) {
+const percent = (rate: number) => `${Math.round(rate * 100)}%`
+
+/** A bar from 0% to 100% of the build's testers. */
+function Bar({ rate, className }: { rate: number; className: string }) {
   return (
     <span className="h-1.5 rounded-sm bg-muted">
-      <span className={cn('block h-full rounded-sm', className)} style={{ width: `${(value / max) * 100}%` }} />
+      <span className={cn('block h-full rounded-sm', className)} style={{ width: percent(rate) }} />
     </span>
   )
 }
 
-function NotesColumn({ title, ids, notes }: { title: string; ids: string[]; notes: NotesById }) {
+function NotesColumn(props: { title: string; side: Side; ids: string[]; notes: NotesById }) {
+  const { title, side, ids, notes } = props
   return (
     <div>
-      <p className="mb-2 font-mono text-xs uppercase text-muted-foreground">{title}</p>
+      <p className="mb-2 font-mono text-xs uppercase text-muted-foreground">
+        {title} · {side.testers} {side.testers === 1 ? 'tester' : 'testers'} · {side.notes}{' '}
+        {side.notes === 1 ? 'note' : 'notes'}
+      </p>
       {ids.length === 0 ? <p className="text-xs text-muted-foreground">No notes.</p> : <ThemeNotes ids={ids} notes={notes} />}
     </div>
   )
@@ -219,8 +248,8 @@ function NotesColumn({ title, ids, notes }: { title: string; ids: string[]; note
 
 /** Green when things got better. For praise themes, "better" means more. */
 function verdict(row: ComparisonRow<Theme>, praise: boolean) {
-  const diff = Math.abs(row.after - row.before)
-  const label = { down: `▼ ${diff}`, up: `▲ ${diff}`, new: 'New', gone: 'Gone', same: 'Same' }[row.change]
+  const points = Math.round(Math.abs(row.after.rate - row.before.rate) * 100)
+  const label = { down: `▼ ${points} pts`, up: `▲ ${points} pts`, new: 'New', gone: 'Gone', same: 'Same' }[row.change]
   const better = praise ? ['up', 'new'] : ['down', 'gone']
   const worse = praise ? ['down', 'gone'] : ['up', 'new']
   const className = better.includes(row.change)

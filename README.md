@@ -10,7 +10,9 @@ Testers leave quick tagged notes (bug / balance / confusing / fun) with an
 optional screenshot while they play, and the dev sees them arrive live. After
 the session, AI groups the notes into named themes. Run the next build's
 session and the compare page shows which themes went down, went up, appeared,
-or disappeared ("Wave 7 too hard: 6 → 1").
+or disappeared ("Wave 7 too hard: 4 of 4 testers → 1 of 4"). It counts
+testers, not notes, so a smaller playtest isn't mistaken for a fix. When the
+AI groups imperfectly, devs rename or merge themes by hand.
 
 ## Try it in a minute
 1. Sign in, then press **Try the demo** (or **Explore a demo project**).
@@ -23,37 +25,37 @@ or disappeared ("Wave 7 too hard: 6 → 1").
 
 | Piece | DeepSpace feature | Why |
 |---|---|---|
-| Who sees what | Collection permissions with the `team` level, `teamField`, a `team_members` collection, `ownerField: 'testerId'`, `writableFields` | Checked on the server for every read and live update. Devs see the project; testers see only their own notes; outsiders get nothing. |
+| Who sees what | Collection permissions with the `access` level, `teamField`, a `team_members` collection, `ownerField` (`testerId` on notes, `ownerId` on projects), `writableFields` | Checked on the server for every read and live update. Devs see the project; testers see only their own notes; outsiders get nothing. `access` rather than `team`, because with `team` whoever created a row could still read it after leaving the team. |
 | Every create | Server actions (`src/actions/index.ts`) | No collection allows creates from the browser. Each action checks team membership, and `submitFeedback` takes project, build and tester ids from the server, never the client. |
 | Live feed | `useQuery` real-time sync | Notes appear on the dev's screen as testers send them. |
 | Screenshots | Built-in file storage, tester's private (`'self'`) folder via `appFiles`, behind our own checked route | Built-in scopes are "uploader only" or "public"; we needed "tester + their project's team". |
 | Themes | `createDeepSpaceAI` + structured output (Claude Sonnet 5.5) | No API key; billed to the owner's DeepSpace credits. The previous build's theme names go in the prompt so the same issue keeps the same name. |
+| One summary at a time | A `summarize_locks` row per build with `uniqueOn` | The record room creates rows one at a time, so when two devs press Summarize together exactly one wins; the other is told who is running it. |
 | Auto-end sessions | Cron task (`src/cron.ts`) | Sessions left open end on their own after 24 hours. |
 
 ## Left out on purpose
 Payments, chat, collaborative text editing, and video uploads: none of them
 help answer "did my fix work?". For motion, testers paste a clip link
 (Medal, YouTube, Streamable) instead. A few uploaded clips would fill the free
-plan's 128 MiB file allowance, and links cost nothing to store. Also no
-per-tester upload caps or per-tester rates on the compare page (see
-"What's next").
+plan's 128 MiB file allowance, and links cost nothing to store. Screenshots
+are capped at 50 per session and 10 per tester per session for the same reason.
 
 ## Who can do what
-- **Owner** (whoever created the project): everything, plus deleting builds
-  or the whole project and removing teammates.
+- **Owner** (whoever created the project, until they hand it to another dev):
+  everything, plus deleting builds or the whole project, removing teammates,
+  and handing over ownership.
 - **Dev** (added to the team): sees every note, adds builds, runs sessions,
-  summarizes, adds teammates, and can leave.
+  summarizes, renames and merges themes, adds teammates, and can leave.
 - **Tester** (invite link only): sends notes and sees only their own.
 
 All of this is checked on the server; removing someone cuts off their live
-updates and screenshots at once.
+updates and screenshots at once, including the builds and themes they made.
 
 ## What's next
-- Normalize counts by number of testers, so a smaller playtest isn't
-  mistaken for a fix.
-- Hand ownership to another dev.
-- A per-session upload cap, and a lock so two devs can't summarize at once.
-- Let the dev rename or merge themes by hand when the AI groups imperfectly.
+- Move a single note from one theme to another (today: merge, rename, or
+  re-summarize).
+- A refresh signal when someone is added or removed, so their open page
+  updates without a reload (blocked on a DeepSpace SDK bug, see NOTES.md).
 
 ## Run it locally
 ```sh

@@ -557,3 +557,120 @@ a lock around summarizing.
   open page (checked in the raw WebSocket frames), and on reload he gets
   "Project not found" and a 404 for screenshots. Demo test deletes the v0.6
   build through the UI. Full suite passes (15 unit, 14 browser).
+
+## Per-tester compare, ownership hand-over, upload cap, summarize lock, theme editing (2026-11-19)
+
+### Found first: removed devs kept rows they created
+While planning "hand ownership to another dev" I re-read how DeepSpace runs
+list queries for the `'team'` read level (`executeTableQuery` in
+`dist/worker.js`). For `'team'` it uses a fast SQL filter:
+`teamId IN (my teams) OR _created_by = me`. That second part ignores
+`ownerField` and never expires. So anyone who **created** a row could read it
+forever, even after being removed from the team. Before today's fix:
+- a removed dev still received every build they had added, every session
+  they had opened, and every theme from a summary they ran;
+- after a hand-over, the original owner (who created the project row) would
+  still see the project after the new owner removed them.
+The test from the last change missed this because Cy had created nothing.
+
+**Fix:** every collection now uses the `'access'` read level instead. It
+means the same thing ("owner, collaborator, or team member"), but DeepSpace
+has no fast path for it, so each row is checked against that rule and
+`ownerField` is respected. `ownerField` is now:
+- projects: `ownerId` (the current owner, see below);
+- notes: `testerId` (unchanged);
+- team_members: `userId` (unchanged: you can read your own membership row);
+- builds, sessions, themes, summarize_locks: `projectId`, which is never a
+  user id. Nobody owns a build personally; access comes only from the team.
+
+**Proof:** the permission test has Cy add a build as a dev, then removes
+him, reloads his page, and checks the raw WebSocket frames: nothing from the
+project, including his own build. It also has the original owner hand over
+the project, get removed by the new owner, and checks she receives neither
+the project she created nor its first build. I ran the test once with the
+old `'team'` rule put back: it failed with
+`removed dev received "v-made-by-cy-…"`. With `'access'` it passes.
+**Cost:** per-row checks instead of one SQL filter. Each project query
+already filters by `projectId` in SQL, so only the rows of one project are
+checked; fine at this size. **Risk:** this relies on `'team'` and `'access'`
+behaving differently in list queries. The SDK is pinned to 0.44.2 and the
+permission test would catch a change.
+
+### 1. Compare by share of testers, not raw note counts
+- Each theme now counts **distinct testers** (one tester writing about wave 7
+  five times is one tester). The compare page shows the share of that
+  build's testers who raised it: "Wave 7 too hard 100% → 25%" (4 of 4 testers
+  → 1 of 4). Opening a theme shows "v0.4 · 4 testers · 6 notes".
+- Verdicts use percentage points: "▼ 75 pts". Moves under 10 points count as
+  "Same", so with a big playtest one or two people changing their mind don't
+  look like a fix. With 4 testers one person is 25 points, so real moves show.
+- If either build had fewer than 3 testers, a note warns that the
+  percentages swing a lot.
+- Pure logic in `src/lib/themes.ts` (`tallyThemes`, `compareThemes`, unit
+  tested), including a case where note counts drop 6 → 3 only because the
+  playtest halved, and the verdict is correctly "Same".
+- The AI test caught a real consequence: with ONE tester writing every note,
+  wave 7 went 1 of 1 → 1 of 1 = "Same" (true: that one tester still hit it).
+  The test now spreads notes over two tester accounts, like a real playtest.
+- The demo's story holds (both builds have 4 testers): wave 7 ▼ 75 pts,
+  crash gone, placement ▲ 25 pts despite the changelog.
+
+### 2. Hand ownership to another dev
+- Projects got an `ownerId` field. The owner used to be "whoever created the
+  row" (`createdBy`), which can never change. Older projects have no
+  `ownerId`, so `projectOwnerId()` falls back to `createdBy`.
+- `transferOwnership` action: only the current owner; the new owner must
+  already be on the team. The old owner stays on as a dev. The browser can't
+  write `ownerId` (projects' `writableFields` is still just `name`).
+- UI: the owner sees "Make owner" next to each teammate, with a "Yes, make
+  owner" confirm in the row. The page updates live for both people.
+
+### 3. Per-session screenshot cap
+- 50 screenshots per session, 10 per tester per session, checked in
+  `submitFeedback` before uploading. Why these numbers: the free plan has
+  128 MiB of file storage for the whole app and screenshots are about
+  0.2-0.5 MB after downscaling, so one session uses at most about 25 MB.
+- The message tells the tester to send the note without a screenshot or add
+  a clip link; notes without screenshots aren't limited.
+- Not exact under a race: two uploads in the same instant at 49 could both
+  pass. A loose cap like this doesn't need to be exact.
+
+### 4. Only one summary at a time
+- New `summarize_locks` collection: one row per build at most (`uniqueOn:
+  buildId`). `summarizeSession` creates the row before calling the AI and
+  deletes it when done (in a `finally`, so errors release it too). The record
+  room handles creates one at a time, so when two devs press Summarize
+  together exactly one create succeeds; the other gets "Ava is already
+  summarizing this build. Wait for it to finish."
+- A lock older than 5 minutes is treated as left over from a crash and
+  cleared.
+- The team can read the lock, so the themes panel shows "Ava is grouping
+  these notes with AI right now…" to everyone live.
+- Lock per **build**, not per session, because themes belong to the build.
+- Proved in the AI test: two summarize calls at the same moment, exactly
+  one succeeds and the other gets the "already summarizing" message.
+
+### 5. Rename and merge themes by hand
+- Session page → "Edit themes". Each theme gets a name box and a tick box.
+  Name boxes suggest theme names from the project's other builds: renaming a
+  theme to match one on the previous build is how a dev links them when the
+  AI didn't, and the compare page lines them up.
+- `renameTheme`: refused if another theme on the build already has that name
+  (merge them instead). `mergeThemes`: two or more themes of one build; the
+  biggest is kept with every note (no repeats) and both summaries; the
+  others are deleted. Both are team-only and refused while a summary is
+  running on that build.
+- Re-summarizing replaces hand edits; the edit panel says so.
+
+### Tested
+- Unit: 18 (compare by tester share, "same" band, tester tally, merge).
+- Browser, full suite passes. Permission test adds: non-owners can't hand
+  over; 10-screenshot cap per tester; removed dev loses rows he created;
+  hand-over through the UI; the old owner loses access after removal; the
+  new owner deletes the project. Demo test adds: per-tester labels, an
+  outsider can't rename a theme, rename refusal on a taken name, rename,
+  merge (including the "tick at least two" message), and the compare page
+  following the edits.
+- AI test (opt-in): passes, including the lock.
+- Not tested automatically: the 50-per-session cap (would need 50 uploads)
+  and lock expiry after 5 minutes.

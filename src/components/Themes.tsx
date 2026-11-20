@@ -2,16 +2,16 @@
  * Theme UI shared by the session page and the compare page.
  */
 
-import { useState } from 'react'
+import { useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { useQuery, useUserLookup, type RecordData } from 'deepspace'
-import { Button, useToast } from './ui'
+import { useAuth, useQuery, useUserLookup, type RecordData } from 'deepspace'
+import { Button, Input, Label, useToast } from './ui'
 import { ClipLink } from './ClipLink'
 import { TAG_META, TagChip } from './Tag'
 import { callAction } from '../lib/actions'
 import { testerLabel } from '../lib/format'
 import { cn } from '../lib/utils'
-import { TAGS, type FeedbackData, type Tag, type ThemeData } from '../schemas/playtest-schemas'
+import { TAGS, type FeedbackData, type SummarizeLockData, type Tag, type ThemeData } from '../schemas/playtest-schemas'
 
 export type NotesById = Map<string, RecordData<FeedbackData>>
 
@@ -52,9 +52,12 @@ export function ThemeNotes({ ids, notes }: { ids: string[]; notes: NotesById }) 
   )
 }
 
+/** A summarize lock older than this is ignored (same rule as the server). */
+const LOCK_STALE_MS = 5 * 60 * 1000
+
 /**
- * Themes for one build, with the Summarize button. Shown on a session page;
- * themes cover every session of the build.
+ * Themes for one build, with the Summarize button and hand editing. Shown on
+ * a session page; themes cover every session of the build.
  */
 export function ThemesPanel(props: {
   projectId: string
@@ -65,13 +68,27 @@ export function ThemesPanel(props: {
 }) {
   const themes = useQuery<ThemeData>('themes', { where: { buildId: props.buildId }, orderBy: 'count', orderDir: 'desc' })
   const buildNotes = useQuery<FeedbackData>('feedback', { where: { buildId: props.buildId } })
+  const locks = useQuery<SummarizeLockData>('summarize_locks', { where: { buildId: props.buildId } })
+  const projectThemes = useQuery<ThemeData>('themes', { where: { projectId: props.projectId } })
+  const { userId } = useAuth()
+  const { getName } = useUserLookup()
   const [busy, setBusy] = useState(false)
+  const [editing, setEditing] = useState(false)
   const { success, error } = useToast()
 
   const notes: NotesById = new Map(buildNotes.records.map((n) => [n.recordId, n]))
   const grouped = themes.records.reduce((sum, t) => sum + t.data.count, 0)
   const ungrouped = buildNotes.records.length - grouped
   const hasThemes = themes.records.length > 0
+
+  // Someone (maybe a teammate) is summarizing this build right now.
+  const lock = locks.records.find((l) => Date.now() - Date.parse(l.createdAt) < LOCK_STALE_MS)
+  const lockedBy = lock && (lock.data.userId === userId ? 'You are' : `${getName(lock.data.userId) ?? 'A teammate'} is`)
+
+  // Theme names from the project's other builds, offered while renaming.
+  const otherNames = [
+    ...new Set(projectThemes.records.filter((t) => t.data.buildId !== props.buildId).map((t) => t.data.name)),
+  ]
 
   async function summarize() {
     setBusy(true)
@@ -80,6 +97,7 @@ export function ThemesPanel(props: {
         'summarizeSession',
         { sessionId: props.sessionId },
       )
+      setEditing(false)
       success(
         `${r.noteCount} notes → ${r.themeCount} themes`,
         r.matchedPrevious > 0 ? `${r.matchedPrevious} match themes from the previous build.` : undefined,
@@ -109,14 +127,19 @@ export function ThemesPanel(props: {
           </p>
         </div>
         {!props.sessionOpen && (
-          <div className="flex items-center gap-2">
-            {hasThemes && (
+          <div className="flex flex-wrap items-center gap-2">
+            {hasThemes && !editing && (
               <Link
                 to={`/projects/${props.projectId}/compare?to=${props.buildId}`}
                 className="text-sm font-medium underline underline-offset-4"
               >
                 Compare builds
               </Link>
+            )}
+            {hasThemes && (
+              <Button variant="ghost" onClick={() => setEditing(!editing)}>
+                {editing ? 'Done editing' : 'Edit themes'}
+              </Button>
             )}
             <Button onClick={summarize} loading={busy} variant={hasThemes ? 'outline' : 'default'}>
               {busy ? 'Grouping notes…' : hasThemes ? 'Re-summarize' : 'Summarize with AI'}
@@ -125,8 +148,17 @@ export function ThemesPanel(props: {
         )}
       </div>
       {busy && <p className="mt-2 font-mono text-xs text-muted-foreground">This usually takes 10–30 seconds.</p>}
+      {lockedBy && !busy && (
+        <p role="status" className="mt-2 font-mono text-xs text-muted-foreground">
+          {lockedBy} grouping these notes with AI right now…
+        </p>
+      )}
 
-      {hasThemes && (
+      {hasThemes && editing && (
+        <ThemeEditor themes={themes.records} notes={notes} otherNames={otherNames} buildId={props.buildId} />
+      )}
+
+      {hasThemes && !editing && (
         <ul className="mt-4 divide-y divide-border border-t border-border">
           {themes.records.map((t) => {
             const tag = dominantTag(t.data.feedbackIds, notes)
@@ -154,5 +186,178 @@ export function ThemesPanel(props: {
         </ul>
       )}
     </section>
+  )
+}
+
+/**
+ * Fix the AI's grouping by hand: rename a theme (for example to match a
+ * theme on another build, so the compare page lines them up), or tick two
+ * or more and merge them into one.
+ */
+function ThemeEditor(props: {
+  themes: RecordData<ThemeData>[]
+  notes: NotesById
+  otherNames: string[]
+  buildId: string
+}) {
+  const [picked, setPicked] = useState<string[]>([])
+  const [mergeName, setMergeName] = useState('')
+  const [problem, setProblem] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const { success } = useToast()
+  const listId = `theme-names-${props.buildId}`
+
+  // Merged themes disappear from the live list, and their ticks with them.
+  const selected = props.themes.filter((t) => picked.includes(t.recordId))
+  const biggest = [...selected].sort((a, b) => b.data.count - a.data.count)[0]
+
+  function toggle(id: string) {
+    setProblem(null)
+    setPicked((now) => (now.includes(id) ? now.filter((x) => x !== id) : [...now, id]))
+  }
+
+  async function merge(e: FormEvent) {
+    e.preventDefault()
+    if (selected.length < 2) {
+      setProblem('Tick at least two themes to merge.')
+      return
+    }
+    const name = mergeName.trim() || biggest.data.name
+    setBusy(true)
+    setProblem(null)
+    try {
+      // The biggest theme goes first, so it's the one that's kept.
+      const ids = [biggest, ...selected.filter((t) => t !== biggest)].map((t) => t.recordId)
+      const r = await callAction<{ count: number }>('mergeThemes', { themeIds: ids, name })
+      success('Themes merged', `"${name}" now has ${r.count} notes.`)
+      setPicked([])
+      setMergeName('')
+    } catch (err) {
+      setProblem((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mt-4 border-t border-border pt-4">
+      <p className="text-sm text-muted-foreground">
+        Give a theme the same name as one on another build and the compare page will line them up. Tick two or more
+        to merge them. Re-summarizing replaces these edits.
+      </p>
+      <datalist id={listId}>
+        {props.otherNames.map((n) => (
+          <option key={n} value={n} />
+        ))}
+      </datalist>
+
+      <ul className="mt-3 divide-y divide-border">
+        {props.themes.map((t) => (
+          <ThemeEditRow
+            // Keyed by name too, so the box resets when a merge renames the theme.
+            key={`${t.recordId}:${t.data.name}`}
+            theme={t}
+            tag={dominantTag(t.data.feedbackIds, props.notes)}
+            picked={picked.includes(t.recordId)}
+            onToggle={() => toggle(t.recordId)}
+            listId={listId}
+          />
+        ))}
+      </ul>
+
+      {selected.length > 0 && (
+        <form onSubmit={merge} className="mt-4 rounded border border-border bg-background p-4">
+          <Label htmlFor="merge-name">
+            Merge {selected.length} {selected.length === 1 ? 'theme' : 'themes'} into
+          </Label>
+          <div className="mt-1 flex gap-2">
+            <Input
+              id="merge-name"
+              value={mergeName}
+              onChange={(e) => setMergeName(e.target.value)}
+              placeholder={biggest?.data.name}
+              maxLength={80}
+              list={listId}
+            />
+            <Button type="submit" loading={busy}>
+              Merge
+            </Button>
+          </div>
+          {problem && (
+            <p role="alert" className="mt-2 text-sm text-destructive">
+              {problem}
+            </p>
+          )}
+        </form>
+      )}
+    </div>
+  )
+}
+
+function ThemeEditRow(props: {
+  theme: RecordData<ThemeData>
+  tag: Tag
+  picked: boolean
+  onToggle: () => void
+  listId: string
+}) {
+  const { theme } = props
+  const [name, setName] = useState(theme.data.name)
+  const [problem, setProblem] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const { success } = useToast()
+
+  async function rename(e: FormEvent) {
+    e.preventDefault()
+    if (!name.trim()) {
+      setProblem('Enter a name.')
+      return
+    }
+    if (name.trim() === theme.data.name) {
+      setProblem('Type a new name first.')
+      return
+    }
+    setBusy(true)
+    setProblem(null)
+    try {
+      await callAction('renameTheme', { themeId: theme.recordId, name })
+      success('Theme renamed', name.trim())
+    } catch (err) {
+      setProblem((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <li className="py-3" data-theme-id={theme.recordId}>
+      <form onSubmit={rename} className="flex items-center gap-3">
+        <input
+          type="checkbox"
+          checked={props.picked}
+          onChange={props.onToggle}
+          aria-label={`Select ${theme.data.name} to merge`}
+          className="h-4 w-4 shrink-0 accent-primary"
+        />
+        <span className={cn('h-2 w-2 shrink-0 rounded-full', TAG_META[props.tag].dot)} aria-hidden />
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          aria-label={`Name of theme ${theme.data.name}`}
+          maxLength={80}
+          list={props.listId}
+          className="h-9"
+        />
+        <span className="w-6 shrink-0 text-right font-mono text-sm">{theme.data.count}</span>
+        <Button type="submit" size="sm" variant="outline" loading={busy}>
+          Rename
+        </Button>
+      </form>
+      {problem && (
+        <p role="alert" className="mt-1 pl-7 text-sm text-destructive">
+          {problem}
+        </p>
+      )}
+    </li>
   )
 }
